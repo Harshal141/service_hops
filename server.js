@@ -1,12 +1,18 @@
+require('dotenv').config();
 const express = require('express');
+const usersRouter = require('./routes/users');
 
 const app = express();
+app.use(express.json());
 const PORT = process.env.PORT || 8080;
 
 // Health route
 app.get('/', (req, res) => {
   res.status(200).json({ status: 'ok', time: new Date().toISOString(), uptime: process.uptime() });
 });
+
+// Users routes
+app.use('/users', usersRouter);
 
 // 404 for anything else
 app.use((req, res) => {
