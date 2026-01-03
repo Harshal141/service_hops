@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const usersRouter = require('./routes/users');
+const earlyAccessRouter = require('./routes/earlyAccess');
 
 const app = express();
 app.use(express.json());
@@ -13,6 +14,9 @@ app.get('/', (req, res) => {
 
 // Users routes
 app.use('/users', usersRouter);
+
+// Early access routes
+app.use('/api/early-access', earlyAccessRouter);
 
 // 404 for anything else
 app.use((req, res) => {
