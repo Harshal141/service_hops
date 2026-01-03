@@ -26,6 +26,7 @@ router.post('/', async (req, res) => {
       message: 'Early access request received'
     });
   } catch (error) {
+    console.error('Early access error:', error);
     res.status(500).json({ error: error.message });
   }
 });
