@@ -1,64 +1,35 @@
-const supabase = require('../config/supabase');
+const { getDb } = require('../config/db');
 
-const TABLE_NAME = 'users';
-
-const findAll = async () => {
-  const { data, error } = await supabase
-    .from(TABLE_NAME)
-    .select('*');
-
-  if (error) throw error;
-  return data;
+const findAll = async (env) => {
+  const sql = getDb(env);
+  return await sql`SELECT * FROM users`;
 };
 
-const findById = async (id) => {
-  const { data, error } = await supabase
-    .from(TABLE_NAME)
-    .select('*')
-    .eq('id', id)
-    .single();
-
-  if (error) throw error;
-  return data;
+const findById = async (id, env) => {
+  const sql = getDb(env);
+  const rows = await sql`SELECT * FROM users WHERE id = ${id}`;
+  if (!rows.length) throw new Error('User not found');
+  return rows[0];
 };
 
-const create = async (userData) => {
-  const { data, error } = await supabase
-    .from(TABLE_NAME)
-    .insert([userData])
-    .select()
-    .single();
-
-  if (error) throw error;
-  return data;
+const create = async (userData, env) => {
+  const sql = getDb(env);
+  const { name, email } = userData;
+  const rows = await sql`INSERT INTO users (name, email) VALUES (${name}, ${email}) RETURNING *`;
+  return rows[0];
 };
 
-const update = async (id, userData) => {
-  const { data, error } = await supabase
-    .from(TABLE_NAME)
-    .update(userData)
-    .eq('id', id)
-    .select()
-    .single();
-
-  if (error) throw error;
-  return data;
+const update = async (id, userData, env) => {
+  const sql = getDb(env);
+  const { name, email } = userData;
+  const rows = await sql`UPDATE users SET name = ${name}, email = ${email} WHERE id = ${id} RETURNING *`;
+  return rows[0];
 };
 
-const remove = async (id) => {
-  const { error } = await supabase
-    .from(TABLE_NAME)
-    .delete()
-    .eq('id', id);
-
-  if (error) throw error;
+const remove = async (id, env) => {
+  const sql = getDb(env);
+  await sql`DELETE FROM users WHERE id = ${id}`;
   return true;
 };
 
-module.exports = {
-  findAll,
-  findById,
-  create,
-  update,
-  remove
-};
+module.exports = { findAll, findById, create, update, remove };

@@ -2,11 +2,15 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const usersRouter = require('./routes/users');
-const earlyAccessRouter = require('./routes/earlyAccess');
+const { testDBConnection } = require('./config/db');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+testDBConnection('stage');
+testDBConnection('prod');
+
 const PORT = process.env.PORT || 8080;
 
 // Health route
@@ -16,9 +20,6 @@ app.get('/', (req, res) => {
 
 // Users routes
 app.use('/users', usersRouter);
-
-// Early access routes
-app.use('/api/early-access', earlyAccessRouter);
 
 // 404 for anything else
 app.use((req, res) => {
