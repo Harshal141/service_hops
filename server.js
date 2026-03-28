@@ -2,6 +2,10 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const usersRouter = require('./routes/users');
+const authRouter = require('./routes/auth');
+const profileRouter = require('./routes/profile');
+const skillRouter = require('./routes/skill');
+const { requireAuth } = require('./middleware/auth');
 const { testDBConnection } = require('./config/db');
 
 const app = express();
@@ -18,11 +22,20 @@ app.get('/', (req, res) => {
   res.status(200).json({ status: 'ok', time: new Date().toISOString(), uptime: process.uptime() });
 });
 
-// Users routes
-app.use('/users', usersRouter);
+// Auth routes (no auth middleware — called during sign-in)
+app.use('/auth', authRouter);
+
+// Users routes (requires auth)
+app.use('/users', requireAuth, usersRouter);
+
+// Profile routes (mixed — GET /:userId is public, writes require auth)
+app.use('/profile', profileRouter);
+
+// Skill routes (public)
+app.use('/skill', skillRouter);
 
 // 404 for anything else
-app.use((req, res) => {
+app.use((_req, res) => {
   res.status(404).json({ error: 'Not Found' });
 });
 

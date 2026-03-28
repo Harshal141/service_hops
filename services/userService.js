@@ -21,8 +21,13 @@ const create = async (userData, env) => {
 
 const update = async (id, userData, env) => {
   const sql = getDb(env);
-  const { name, email } = userData;
-  const rows = await sql`UPDATE users SET name = ${name}, email = ${email} WHERE id = ${id} RETURNING *`;
+  const { name, email, title, location } = userData;
+  const rows = await sql`
+    UPDATE users
+    SET name = ${name}, email = ${email}, title = ${title ?? null}, location = ${location ?? null}, updated_at = NOW()
+    WHERE id = ${id}
+    RETURNING *
+  `;
   return rows[0];
 };
 
@@ -32,4 +37,20 @@ const remove = async (id, env) => {
   return true;
 };
 
-module.exports = { findAll, findById, create, update, remove };
+// Called on every OAuth sign-in — creates user on first login, updates name/icon on return
+const upsert = async (userData, env) => {
+  const sql = getDb(env);
+  const { name, email, icon } = userData;
+  const handle = (name ?? 'user').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '-' + Date.now().toString(36).slice(-4);
+
+  const rows = await sql`
+    INSERT INTO users (user_id, name, email, icon)
+    VALUES (${handle}, ${name}, ${email}, ${icon})
+    ON CONFLICT (email) DO UPDATE
+      SET name = EXCLUDED.name, icon = EXCLUDED.icon, updated_at = NOW()
+    RETURNING *
+  `;
+  return rows[0];
+};
+
+module.exports = { findAll, findById, create, update, remove, upsert };
