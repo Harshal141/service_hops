@@ -19,12 +19,10 @@ const create = async (userData, env) => {
   return rows[0];
 };
 
-const update = async (id, userData, env) => {
+const update = async (id, { name }, env) => {
   const sql = getDb(env);
-  const { name, email, title, location } = userData;
   const rows = await sql`
-    UPDATE users
-    SET name = ${name}, email = ${email}, title = ${title ?? null}, location = ${location ?? null}, updated_at = NOW()
+    UPDATE users SET name = ${name}, updated_at = NOW()
     WHERE id = ${id}
     RETURNING *
   `;

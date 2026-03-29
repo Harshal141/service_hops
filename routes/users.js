@@ -32,6 +32,7 @@ router.post('/', async (req, res) => {
 });
 
 router.put('/:id', async (req, res) => {
+  if (req.params.id !== req.userId) return res.status(403).json({ error: 'Forbidden' });
   try {
     const user = await userService.update(req.params.id, req.body, getEnv(req));
     res.json(user);

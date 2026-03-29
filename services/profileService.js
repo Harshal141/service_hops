@@ -5,7 +5,12 @@ const { getDb } = require('../config/db');
 const getByUserId = async (userId, env) => {
   const sql = getDb(env);
 
-  const [profile] = await sql`SELECT * FROM profile WHERE id = ${userId}`;
+  const [profile] = await sql`
+    SELECT p.*, u.name, u.email, u.icon
+    FROM profile p
+    JOIN users u ON u.id = p.id
+    WHERE p.id = ${userId}
+  `;
   if (!profile) return null;
 
   const [links, experience, education, skills] = await Promise.all([
@@ -25,17 +30,26 @@ const getByUserId = async (userId, env) => {
 
 const upsert = async (userId, data, env) => {
   const sql = getDb(env);
-  const { bio, title, location, status } = data;
+  const { bio, title, location, status, section_config } = data;
+
+  const defaultSectionConfig = [
+    { key: 'links',      visible: true },
+    { key: 'about',      visible: true },
+    { key: 'skills',     visible: true },
+    { key: 'experience', visible: true },
+    { key: 'education',  visible: true },
+  ];
 
   const [profile] = await sql`
-    INSERT INTO profile (id, bio, title, location, status)
-    VALUES (${userId}, ${bio ?? null}, ${title ?? null}, ${location ?? null}, ${status ?? 'public'})
+    INSERT INTO profile (id, bio, title, location, status, section_config)
+    VALUES (${userId}, ${bio ?? null}, ${title ?? null}, ${location ?? null}, ${status ?? 'public'}, ${JSON.stringify(section_config ?? defaultSectionConfig)})
     ON CONFLICT (id) DO UPDATE
-      SET bio      = COALESCE(EXCLUDED.bio,      profile.bio),
-          title    = COALESCE(EXCLUDED.title,    profile.title),
-          location = COALESCE(EXCLUDED.location, profile.location),
-          status   = COALESCE(EXCLUDED.status,   profile.status),
-          updated_at = NOW()
+      SET bio            = COALESCE(EXCLUDED.bio,            profile.bio),
+          title          = COALESCE(EXCLUDED.title,          profile.title),
+          location       = COALESCE(EXCLUDED.location,       profile.location),
+          status         = COALESCE(EXCLUDED.status,         profile.status),
+          section_config = COALESCE(EXCLUDED.section_config, profile.section_config),
+          updated_at     = NOW()
     RETURNING *
   `;
   return profile;
