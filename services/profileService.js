@@ -220,6 +220,21 @@ const searchSkills = async (query, env) => {
   `;
 };
 
+const getDefaultSkills = async (env) => {
+  const sql = getDb(env);
+
+  // top seeded skills alphabetically — shown before the user types anything
+  return await sql`
+    SELECT id, name, level, parent_id, user_created
+    FROM skill
+    WHERE level = 3
+      AND status = 'active'
+      AND user_created = false
+    ORDER BY name ASC
+    LIMIT 15
+  `;
+};
+
 module.exports = {
   getByUserId,
   upsert,
@@ -227,5 +242,5 @@ module.exports = {
   addExperience, updateExperience, deleteExperience,
   addEducation, updateEducation, deleteEducation,
   addSkill, removeSkill,
-  searchSkills,
+  searchSkills, getDefaultSkills,
 };
