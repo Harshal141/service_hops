@@ -5,6 +5,7 @@ const usersRouter = require('./routes/users');
 const authRouter = require('./routes/auth');
 const profileRouter = require('./routes/profile');
 const skillRouter = require('./routes/skill');
+const connectionRouter = require('./routes/connection');
 const { requireAuth } = require('./middleware/auth');
 const { testDBConnection } = require('./config/db');
 
@@ -33,6 +34,9 @@ app.use('/profile', profileRouter);
 
 // Skill routes (public)
 app.use('/skill', skillRouter);
+
+// Connection routes (requires auth — handled inside the router)
+app.use('/connection', connectionRouter);
 
 // 404 for anything else
 app.use((_req, res) => {

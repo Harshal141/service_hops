@@ -51,4 +51,17 @@ const upsert = async (userData, env) => {
   return rows[0];
 };
 
-module.exports = { findAll, findById, create, update, remove, upsert };
+const searchByName = async (query, env) => {
+  const sql = getDb(env);
+  return await sql`
+    SELECT u.id, u.user_id, u.name, u.icon, p.title
+    FROM users u
+    LEFT JOIN profile p ON p.id = u.id
+    WHERE u.name ILIKE ${'%' + query + '%'}
+      AND u.status = 'active'
+    ORDER BY u.name ASC
+    LIMIT 20
+  `;
+};
+
+module.exports = { findAll, findById, create, update, remove, upsert, searchByName };

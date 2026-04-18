@@ -13,6 +13,17 @@ router.get('/', async (req, res) => {
   }
 });
 
+router.get('/search', async (req, res) => {
+  try {
+    const query = req.query.q ?? '';
+    if (!query.trim()) return res.json([]);
+    const users = await userService.searchByName(query, getEnv(req));
+    res.json(users);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.get('/:id', async (req, res) => {
   try {
     const user = await userService.findById(req.params.id, getEnv(req));
