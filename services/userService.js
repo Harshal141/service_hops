@@ -51,14 +51,33 @@ const upsert = async (userData, env) => {
   return rows[0];
 };
 
-const searchByName = async (query, env) => {
+// Name search from a viewer's perspective. Excludes the viewer and annotates
+// each result with the existing relationship, so the caller can render the right
+// action (connect / pending / respond / connected) without a query per row.
+const searchByName = async (query, viewerId, env) => {
   const sql = getDb(env);
   return await sql`
-    SELECT u.id, u.user_id, u.name, u.icon, p.title
+    SELECT
+      u.id, u.user_id, u.name, u.icon, p.title,
+      EXISTS (
+        SELECT 1 FROM connection c
+        WHERE c.status = 'active'
+          AND LEAST(c.user_a_id, c.user_b_id) = LEAST(${viewerId}, u.id)
+          AND GREATEST(c.user_a_id, c.user_b_id) = GREATEST(${viewerId}, u.id)
+      ) AS is_connected,
+      (
+        SELECT CASE WHEN cr.requester_id = ${viewerId} THEN 'outgoing' ELSE 'incoming' END
+        FROM connection_request cr
+        WHERE cr.status = 'pending'
+          AND LEAST(cr.requester_id, cr.addressee_id) = LEAST(${viewerId}, u.id)
+          AND GREATEST(cr.requester_id, cr.addressee_id) = GREATEST(${viewerId}, u.id)
+        LIMIT 1
+      ) AS pending_direction
     FROM users u
     LEFT JOIN profile p ON p.id = u.id
     WHERE u.name ILIKE ${'%' + query + '%'}
       AND u.status = 'active'
+      AND u.id <> ${viewerId}
     ORDER BY u.name ASC
     LIMIT 20
   `;

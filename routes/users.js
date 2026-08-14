@@ -17,7 +17,7 @@ router.get('/search', async (req, res) => {
   try {
     const query = req.query.q ?? '';
     if (!query.trim()) return res.json([]);
-    const users = await userService.searchByName(query, getEnv(req));
+    const users = await userService.searchByName(query, req.userId, getEnv(req));
     res.json(users);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -53,6 +53,7 @@ router.put('/:id', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
+  if (req.params.id !== req.userId) return res.status(403).json({ error: 'Forbidden' });
   try {
     await userService.remove(req.params.id, getEnv(req));
     res.status(204).send();

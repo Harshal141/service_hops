@@ -5,8 +5,10 @@ const connections = {
   prod: neon(process.env.NEON_PROD_URL),
 };
 
+// Explicit allowlist — never index `connections` with a caller-supplied string,
+// or an `X-Env: constructor` header resolves to Object.prototype members.
 function getDb(env) {
-  return connections[env] ?? connections.stage;
+  return env === 'prod' ? connections.prod : connections.stage;
 }
 
 async function testDBConnection(env) {

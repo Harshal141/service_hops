@@ -10,7 +10,29 @@ const { requireAuth } = require('./middleware/auth');
 const { testDBConnection } = require('./config/db');
 
 const app = express();
-app.use(cors());
+
+// Only the FE may call this API from a browser. FE_ORIGINS is a comma-separated
+// allowlist; localhost stays permitted so `npm run dev` works out of the box.
+const allowedOrigins = [
+  ...(process.env.FE_ORIGINS ?? '').split(',').map((o) => o.trim()).filter(Boolean),
+  'http://localhost:3000',
+  'http://localhost:3001',
+];
+
+// Reject disallowed browser origins with a clean JSON 403. Throwing inside the
+// cors() origin callback instead yields a 500 HTML error page.
+// A missing Origin header means curl or a server-to-server call, which is fine —
+// identity still requires a verified Bearer token, never a cookie.
+app.use((req, res, next) => {
+  const { origin } = req.headers;
+  if (origin && !allowedOrigins.includes(origin)) {
+    return res.status(403).json({ error: 'Origin not allowed' });
+  }
+  next();
+});
+
+app.use(cors({ origin: allowedOrigins, credentials: true }));
+
 app.use(express.json());
 
 testDBConnection('stage');

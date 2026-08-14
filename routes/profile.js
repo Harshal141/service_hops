@@ -1,12 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const profileService = require('../services/profileService');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, optionalAuth } = require('../middleware/auth');
 
 const getEnv = (req) => req.headers['x-env'] ?? 'stage';
 
 // ── View any profile (no auth required) ───────────────────
-router.get('/:userId', async (req, res) => {
+// optionalAuth so the private-profile check below can recognise the owner
+router.get('/:userId', optionalAuth, async (req, res) => {
   try {
     const profile = await profileService.getByUserId(req.params.userId, getEnv(req));
     if (!profile) return res.status(404).json({ error: 'Profile not found' });
