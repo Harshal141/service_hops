@@ -1,5 +1,10 @@
 const { hkdf } = require('@panva/hkdf');
-const { jwtDecrypt } = require('jose');
+
+// jose v6 is ESM-only and Vercel's Node bootstrap cannot require() an ES module
+// — a top-level require crashes the function at cold start with ERR_REQUIRE_ESM,
+// taking down every route. Import it dynamically and cache the module promise.
+let josePromise;
+const loadJose = () => (josePromise ??= import('jose'));
 
 // Auth.js encrypts its session JWT (JWE, dir + A256CBC-HS512) with a key derived
 // from AUTH_SECRET salted with the *session cookie name*. That name differs
@@ -30,6 +35,8 @@ async function encryptionKeyFor(salt) {
 
 async function verifySessionToken(token) {
   if (!process.env.AUTH_SECRET) return null;
+
+  const { jwtDecrypt } = await loadJose();
 
   for (const salt of COOKIE_SALTS) {
     try {
