@@ -1,65 +1,44 @@
 const express = require('express');
 const router = express.Router();
 const userService = require('../services/userService');
+const { asyncHandler } = require('../utils/asyncHandler');
+const { requireUuid } = require('../utils/validate');
+const { NotFoundError, ForbiddenError } = require('../utils/errors');
 
-const getEnv = (req) => req.headers['x-env'] ?? 'stage';
+// GET / (list every user) and POST / (create a user) were removed:
+//   - the list had no caller and was `SELECT * FROM users`, i.e. an email dump
+//   - the create was unreachable anyway (it omitted user_id, which is NOT NULL
+//     with no default), and user rows must only ever come from /auth/upsert
 
-router.get('/', async (req, res) => {
-  try {
-    const users = await userService.findAll(getEnv(req));
-    res.json(users);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+router.get('/search', asyncHandler(async (req, res) => {
+  const query = (req.query.q ?? '').trim();
+  if (!query) return res.json([]);
+  res.json(await userService.searchByName(query.slice(0, 100), req.userId, req.env));
+}));
 
-router.get('/search', async (req, res) => {
-  try {
-    const query = req.query.q ?? '';
-    if (!query.trim()) return res.json([]);
-    const users = await userService.searchByName(query, req.userId, getEnv(req));
-    res.json(users);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+router.get('/:id', asyncHandler(async (req, res) => {
+  const id = requireUuid(req.params.id, 'id');
+  const user = await userService.findById(id, req.env);
+  if (!user) throw new NotFoundError('User not found');
+  res.json(user);
+}));
 
-router.get('/:id', async (req, res) => {
-  try {
-    const user = await userService.findById(req.params.id, getEnv(req));
-    res.json(user);
-  } catch (error) {
-    res.status(404).json({ error: 'User not found' });
-  }
-});
+router.put('/:id', asyncHandler(async (req, res) => {
+  const id = requireUuid(req.params.id, 'id');
+  if (id !== req.userId) throw new ForbiddenError('You can only update your own account');
 
-router.post('/', async (req, res) => {
-  try {
-    const user = await userService.create(req.body, getEnv(req));
-    res.status(201).json(user);
-  } catch (error) {
-    res.status(400).json({ error: error.message });
-  }
-});
+  const user = await userService.update(id, req.body, req.env);
+  if (!user) throw new NotFoundError('User not found');
+  res.json(user);
+}));
 
-router.put('/:id', async (req, res) => {
-  if (req.params.id !== req.userId) return res.status(403).json({ error: 'Forbidden' });
-  try {
-    const user = await userService.update(req.params.id, req.body, getEnv(req));
-    res.json(user);
-  } catch (error) {
-    res.status(400).json({ error: error.message });
-  }
-});
+router.delete('/:id', asyncHandler(async (req, res) => {
+  const id = requireUuid(req.params.id, 'id');
+  if (id !== req.userId) throw new ForbiddenError('You can only delete your own account');
 
-router.delete('/:id', async (req, res) => {
-  if (req.params.id !== req.userId) return res.status(403).json({ error: 'Forbidden' });
-  try {
-    await userService.remove(req.params.id, getEnv(req));
-    res.status(204).send();
-  } catch (error) {
-    res.status(400).json({ error: error.message });
-  }
-});
+  const deleted = await userService.remove(id, req.env);
+  if (!deleted) throw new NotFoundError('User not found');
+  res.status(204).send();
+}));
 
 module.exports = router;

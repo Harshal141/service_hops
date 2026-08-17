@@ -1,0 +1,41 @@
+-- ============================================================
+-- v12_remove_demo_data — delete the entire demo cohort
+-- Targets: STAGE at go-live. Never needed on prod (demo data never goes there).
+-- Depends on: v8_demo_users.sql, v9_demo_connections.sql, v11_demo_profiles.sql
+-- ============================================================
+--
+-- DESTRUCTIVE. This is the go-live step: run it once, when real users replace the
+-- fixtures. It is safe because every demo account was created by a migration and
+-- carries the '@demo.hops' email marker, which no real sign-in can produce —
+-- `.hops` is not a real TLD, so no LinkedIn account can hold such an address.
+--
+-- One statement is enough because ON DELETE CASCADE reaches everything in two
+-- hops (verified against the live schema before writing this):
+--
+--   users ─┬─ accounts
+--          ├─ sessions
+--          ├─ connection            (user_a_id and user_b_id)
+--          ├─ connection_request    (requester_id and addressee_id)
+--          └─ profile ─┬─ profile_link
+--                      ├─ profile_experience
+--                      ├─ profile_education
+--                      └─ profile_skill
+--
+-- Real users' connections TO a demo user are removed too, which is the intent:
+-- an edge to a deleted fixture is not a relationship worth keeping.
+--
+-- Preview before running:
+--   SELECT id, user_id, name, email FROM users WHERE email LIKE '%@demo.hops';
+
+DELETE FROM users WHERE email LIKE '%@demo.hops';
+
+-- Confirm nothing is left behind (all four should be 0):
+--   SELECT
+--     (SELECT count(*) FROM users WHERE email LIKE '%@demo.hops')                    AS demo_users,
+--     (SELECT count(*) FROM profile p LEFT JOIN users u ON u.id = p.id
+--       WHERE u.id IS NULL)                                                          AS orphan_profiles,
+--     (SELECT count(*) FROM connection c LEFT JOIN users a ON a.id = c.user_a_id
+--       LEFT JOIN users b ON b.id = c.user_b_id WHERE a.id IS NULL OR b.id IS NULL)   AS orphan_connections,
+--     (SELECT count(*) FROM connection_request cr LEFT JOIN users r ON r.id = cr.requester_id
+--       LEFT JOIN users ad ON ad.id = cr.addressee_id
+--       WHERE r.id IS NULL OR ad.id IS NULL)                                          AS orphan_requests;

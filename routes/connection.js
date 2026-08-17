@@ -2,141 +2,98 @@ const express = require('express');
 const router = express.Router();
 const connectionService = require('../services/connectionService');
 const { requireAuth } = require('../middleware/auth');
-
-const getEnv = (req) => req.headers['x-env'] ?? 'stage';
+const { asyncHandler } = require('../utils/asyncHandler');
+const { requireUuid, requireText, clampInt } = require('../utils/validate');
+const { ValidationError } = require('../utils/errors');
 
 const MAX_HOPS_CEILING = 6;   // "six degrees of separation" — the whole premise
 const LIMIT_CEILING = 200;
+const NOTE_MAX = 500;
 
-// Coerce to an int and clamp into range. Returns null for non-numeric input so
-// the caller can 400 on garbage, while out-of-range values clamp silently.
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-const clampParam = (raw, fallback, min, max) => {
-  if (raw === undefined || raw === '') return fallback;
-  const n = Number.parseInt(raw, 10);
-  if (Number.isNaN(n)) return null;
-  return Math.min(Math.max(n, min), max);
-};
-
-// All connection routes require auth
+// Identity is never a parameter — it comes from the verified token via requireAuth.
 router.use(requireAuth);
 
 // ── Requests ──────────────────────────────────────────────
 
-router.post('/request', async (req, res) => {
-  try {
-    const { addresseeId, note } = req.body;
-    if (!addresseeId || !note) return res.status(400).json({ error: 'addresseeId and note are required' });
-    const row = await connectionService.sendRequest(req.userId, addresseeId, note, getEnv(req));
-    res.status(201).json(row);
-  } catch (error) {
-    res.status(400).json({ error: error.message });
-  }
-});
+router.post('/request', asyncHandler(async (req, res) => {
+  const addresseeId = requireUuid(req.body?.addresseeId, 'addresseeId');
+  const note = requireText(req.body?.note, 'note', { max: NOTE_MAX });
 
-router.put('/request/:id/accept', async (req, res) => {
-  try {
-    const { note } = req.body;
-    if (!note) return res.status(400).json({ error: 'note is required' });
-    const connection = await connectionService.acceptRequest(req.params.id, req.userId, note, getEnv(req));
-    res.json(connection);
-  } catch (error) {
-    res.status(400).json({ error: error.message });
-  }
-});
+  const row = await connectionService.sendRequest(req.userId, addresseeId, note, req.env);
+  res.status(201).json(row);
+}));
 
-router.put('/request/:id/decline', async (req, res) => {
-  try {
-    const row = await connectionService.declineRequest(req.params.id, req.userId, getEnv(req));
-    res.json(row);
-  } catch (error) {
-    res.status(400).json({ error: error.message });
-  }
-});
+router.put('/request/:id/accept', asyncHandler(async (req, res) => {
+  const requestId = requireUuid(req.params.id, 'request id');
+  const note = requireText(req.body?.note, 'note', { max: NOTE_MAX });
 
-router.put('/request/:id/withdraw', async (req, res) => {
-  try {
-    const row = await connectionService.withdrawRequest(req.params.id, req.userId, getEnv(req));
-    res.json(row);
-  } catch (error) {
-    res.status(400).json({ error: error.message });
-  }
-});
+  const connection = await connectionService.acceptRequest(requestId, req.userId, note, req.env);
+  res.json(connection);
+}));
 
-router.get('/request/pending', async (req, res) => {
-  try {
-    const rows = await connectionService.getPending(req.userId, getEnv(req));
-    res.json(rows);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+router.put('/request/:id/decline', asyncHandler(async (req, res) => {
+  const requestId = requireUuid(req.params.id, 'request id');
+  const row = await connectionService.declineRequest(requestId, req.userId, req.env);
+  res.json(row);
+}));
 
-router.get('/request/sent', async (req, res) => {
-  try {
-    const rows = await connectionService.getSent(req.userId, getEnv(req));
-    res.json(rows);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+router.put('/request/:id/withdraw', asyncHandler(async (req, res) => {
+  const requestId = requireUuid(req.params.id, 'request id');
+  const row = await connectionService.withdrawRequest(requestId, req.userId, req.env);
+  res.json(row);
+}));
+
+router.get('/request/pending', asyncHandler(async (req, res) => {
+  res.json(await connectionService.getPending(req.userId, req.env));
+}));
+
+router.get('/request/sent', asyncHandler(async (req, res) => {
+  res.json(await connectionService.getSent(req.userId, req.env));
+}));
+
+// Both directions in one array, each row tagged with `direction`.
+router.get('/requests', asyncHandler(async (req, res) => {
+  res.json(await connectionService.getRequests(req.userId, req.env));
+}));
 
 // ── Connections ───────────────────────────────────────────
 
-router.get('/list', async (req, res) => {
-  try {
-    const rows = await connectionService.getConnections(req.userId, getEnv(req));
-    res.json(rows);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+router.get('/list', asyncHandler(async (req, res) => {
+  res.json(await connectionService.getConnections(req.userId, req.env));
+}));
 
 // N-degree traversal — everyone reachable through your network, excluding
 // yourself and your existing 1st-degree connections.
-router.get('/reachable', async (req, res) => {
-  try {
-    const maxHops = clampParam(req.query.maxHops, 3, 1, MAX_HOPS_CEILING);
-    if (maxHops === null) return res.status(400).json({ error: 'maxHops must be an integer' });
+router.get('/reachable', asyncHandler(async (req, res) => {
+  const maxHops = clampInt(req.query.maxHops, {
+    fallback: 3, min: 1, max: MAX_HOPS_CEILING, field: 'maxHops',
+  });
+  const limit = clampInt(req.query.limit, {
+    fallback: 50, min: 1, max: LIMIT_CEILING, field: 'limit',
+  });
 
-    const limit = clampParam(req.query.limit, 50, 1, LIMIT_CEILING);
-    if (limit === null) return res.status(400).json({ error: 'limit must be an integer' });
-
-    const rows = await connectionService.getReachable(req.userId, maxHops, limit, getEnv(req));
-    res.json(rows);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+  res.json(await connectionService.getReachable(req.userId, maxHops, limit, req.env));
+}));
 
 // Shortest chain of people between you and one target — powers the path view.
 // Defaults to the full 6 degrees, since you are asking about a specific person.
-router.get('/path/:targetId', async (req, res) => {
-  try {
-    const { targetId } = req.params;
-    if (!UUID_RE.test(targetId)) return res.status(400).json({ error: 'targetId must be a UUID' });
-    if (targetId === req.userId) return res.status(400).json({ error: 'That is you' });
+router.get('/path/:targetId', asyncHandler(async (req, res) => {
+  const targetId = requireUuid(req.params.targetId, 'targetId');
+  if (targetId === req.userId) throw new ValidationError('That is you');
 
-    const maxHops = clampParam(req.query.maxHops, MAX_HOPS_CEILING, 1, MAX_HOPS_CEILING);
-    if (maxHops === null) return res.status(400).json({ error: 'maxHops must be an integer' });
+  const maxHops = clampInt(req.query.maxHops, {
+    fallback: MAX_HOPS_CEILING, min: 1, max: MAX_HOPS_CEILING, field: 'maxHops',
+  });
 
-    const result = await connectionService.getPathTo(req.userId, targetId, maxHops, getEnv(req));
-    if (!result) return res.status(404).json({ error: 'No path found within ' + maxHops + ' hops' });
+  const result = await connectionService.getPathTo(req.userId, targetId, maxHops, req.env);
+  if (!result) return res.status(404).json({ error: `No path found within ${maxHops} hops` });
 
-    res.json(result);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+  res.json(result);
+}));
 
-router.put('/:id/disconnect', async (req, res) => {
-  try {
-    const row = await connectionService.disconnect(req.params.id, req.userId, getEnv(req));
-    res.json(row);
-  } catch (error) {
-    res.status(400).json({ error: error.message });
-  }
-});
+router.put('/:id/disconnect', asyncHandler(async (req, res) => {
+  const connectionId = requireUuid(req.params.id, 'connection id');
+  res.json(await connectionService.disconnect(connectionId, req.userId, req.env));
+}));
 
 module.exports = router;

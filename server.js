@@ -7,6 +7,8 @@ const profileRouter = require('./routes/profile');
 const skillRouter = require('./routes/skill');
 const connectionRouter = require('./routes/connection');
 const { requireAuth } = require('./middleware/auth');
+const { attachEnv } = require('./middleware/env');
+const { errorHandler } = require('./middleware/errorHandler');
 const { testDBConnection } = require('./config/db');
 
 const app = express();
@@ -33,7 +35,11 @@ app.use((req, res, next) => {
 
 app.use(cors({ origin: allowedOrigins, credentials: true }));
 
-app.use(express.json());
+app.use(express.json({ limit: '32kb' }));
+
+// Resolve X-Env once, before auth — requireAuth checks the token's env claim
+// against it, so this must run first.
+app.use(attachEnv);
 
 testDBConnection('stage');
 testDBConnection('prod');
@@ -64,6 +70,10 @@ app.use('/connection', connectionRouter);
 app.use((_req, res) => {
   res.status(404).json({ error: 'Not Found' });
 });
+
+// Must be last: turns typed errors and known Postgres codes into responses, and
+// anything unrecognised into a generic 500 with the detail logged server-side.
+app.use(errorHandler);
 
 // Only start server if not in Vercel environment
 if (process.env.VERCEL !== '1') {

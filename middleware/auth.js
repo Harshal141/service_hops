@@ -46,32 +46,52 @@ async function verifySessionToken(token) {
   return null;
 }
 
+const bearerFrom = (req) => {
+  const header = req.headers.authorization ?? '';
+  return header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+};
+
+// Which database this token may reach. A token carrying no env claim is treated
+// as stage, so an older token can never be used to select prod.
+const tokenEnv = (payload) => (payload.env === 'prod' ? 'prod' : 'stage');
+
+// Postgres compares uuids case-insensitively but JS `===` does not, so an
+// uppercased uuid could slip past self-comparison checks. Canonicalise once,
+// here, and every downstream comparison is safe.
+const canonicalId = (id) => (typeof id === 'string' ? id.toLowerCase() : id);
+
 // Identity comes from a cryptographically verified token only. The old
 // X-User-Id header is deliberately not honoured: it let any caller act as any
 // user simply by naming their UUID.
 async function requireAuth(req, res, next) {
-  const header = req.headers.authorization ?? '';
-  const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+  const token = bearerFrom(req);
   if (!token) return res.status(401).json({ error: 'Unauthorized' });
 
   const payload = await verifySessionToken(token);
   // `id` is the DB user id, written into the token by the FE jwt callback
   if (!payload?.id) return res.status(401).json({ error: 'Unauthorized' });
 
-  req.userId = payload.id;
+  // X-Env selects the database, so without this a stage session could send
+  // `X-Env: prod` and read production data.
+  if (tokenEnv(payload) !== req.env) {
+    return res.status(403).json({ error: 'Token is not valid for this environment' });
+  }
+
+  req.userId = canonicalId(payload.id);
   next();
 }
 
 // For routes that are public but behave differently for the owner: populates
 // req.userId when a valid token is present, and never rejects.
 async function optionalAuth(req, _res, next) {
-  const header = req.headers.authorization ?? '';
-  const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+  const token = bearerFrom(req);
   if (token) {
     const payload = await verifySessionToken(token);
-    if (payload?.id) req.userId = payload.id;
+    if (payload?.id && tokenEnv(payload) === req.env) {
+      req.userId = canonicalId(payload.id);
+    }
   }
   next();
 }
 
-module.exports = { requireAuth, optionalAuth, verifySessionToken };
+module.exports = { requireAuth, optionalAuth, verifySessionToken, canonicalId };

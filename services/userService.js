@@ -1,52 +1,53 @@
+const crypto = require('crypto');
 const { getDb } = require('../config/db');
 
-const findAll = async (env) => {
-  const sql = getDb(env);
-  return await sql`SELECT * FROM users`;
-};
-
+// Columns safe to return to any authenticated caller. `email`, `status` and
+// `sub_status` are deliberately absent — a user directory must not double as an
+// email harvester.
 const findById = async (id, env) => {
   const sql = getDb(env);
-  const rows = await sql`SELECT * FROM users WHERE id = ${id}`;
-  if (!rows.length) throw new Error('User not found');
-  return rows[0];
-};
-
-const create = async (userData, env) => {
-  const sql = getDb(env);
-  const { name, email } = userData;
-  const rows = await sql`INSERT INTO users (name, email) VALUES (${name}, ${email}) RETURNING *`;
-  return rows[0];
+  const rows = await sql`
+    SELECT id, user_id, name, icon, created_at
+    FROM users
+    WHERE id = ${id}::uuid
+  `;
+  return rows[0] ?? null;
 };
 
 const update = async (id, { name }, env) => {
   const sql = getDb(env);
   const rows = await sql`
     UPDATE users SET name = ${name}, updated_at = NOW()
-    WHERE id = ${id}
-    RETURNING *
+    WHERE id = ${id}::uuid
+    RETURNING id, user_id, name, icon
   `;
-  return rows[0];
+  return rows[0] ?? null;
 };
 
 const remove = async (id, env) => {
   const sql = getDb(env);
-  await sql`DELETE FROM users WHERE id = ${id}`;
-  return true;
+  const rows = await sql`DELETE FROM users WHERE id = ${id}::uuid RETURNING id`;
+  return rows.length > 0;
 };
 
 // Called on every OAuth sign-in — creates user on first login, updates name/icon on return
 const upsert = async (userData, env) => {
   const sql = getDb(env);
   const { name, email, icon } = userData;
-  const handle = (name ?? 'user').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '-' + Date.now().toString(36).slice(-4);
+  // Random suffix, not a timestamp: the last 4 base36 digits of epoch-ms cycle
+  // every ~28 minutes, and user_id is UNIQUE, so two same-named sign-ins could
+  // collide and fail the whole upsert.
+  const slug = (name ?? 'user').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'user';
+  const handle = `${slug}-${crypto.randomUUID().slice(0, 8)}`;
 
+  // Never RETURNING * here — the caller is the sign-in flow, which only needs the
+  // id to put in the token. Returning the whole row leaked email/status.
   const rows = await sql`
     INSERT INTO users (user_id, name, email, icon)
     VALUES (${handle}, ${name}, ${email}, ${icon})
     ON CONFLICT (email) DO UPDATE
       SET name = EXCLUDED.name, icon = EXCLUDED.icon, updated_at = NOW()
-    RETURNING *
+    RETURNING id, user_id, name, icon
   `;
   return rows[0];
 };
@@ -83,4 +84,4 @@ const searchByName = async (query, viewerId, env) => {
   `;
 };
 
-module.exports = { findAll, findById, create, update, remove, upsert, searchByName };
+module.exports = { findById, update, remove, upsert, searchByName };
