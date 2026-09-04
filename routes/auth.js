@@ -9,12 +9,12 @@ const { ValidationError } = require('../utils/errors');
 // session token yet at this point, so it is gated on the shared internal secret
 // rather than requireAuth — see middleware/internal.js for why that matters.
 router.post('/upsert', requireInternalSecret, asyncHandler(async (req, res) => {
-  const { name, email, icon } = req.body ?? {};
+  const { name, email, icon, referredBy } = req.body ?? {};
   if (typeof email !== 'string' || !email.includes('@')) {
     throw new ValidationError('A valid email is required');
   }
 
-  res.json(await userService.upsert({ name, email, icon }, req.env));
+  res.json(await userService.upsert({ name, email, icon, referredBy }, req.env));
 }));
 
 module.exports = router;

@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { getDb } = require('../config/db');
+const { isUuid } = require('../utils/validate');
 
 // Columns safe to return to any authenticated caller. `email`, `status` and
 // `sub_status` are deliberately absent — a user directory must not double as an
@@ -30,24 +31,40 @@ const remove = async (id, env) => {
   return rows.length > 0;
 };
 
-// Called on every OAuth sign-in — creates user on first login, updates name/icon on return
+// Called on every OAuth sign-in — creates user on first login, updates name/icon on return.
+// `referredBy`, if present, is only ever considered for a brand-new row (see the
+// `inserted` flag below) — an existing user can never retroactively become
+// "referred". referred_by is deliberately left out of the ON CONFLICT SET clause
+// so a returning user's row is never touched by it.
 const upsert = async (userData, env) => {
   const sql = getDb(env);
-  const { name, email, icon } = userData;
+  const { name, email, icon, referredBy } = userData;
   // Random suffix, not a timestamp: the last 4 base36 digits of epoch-ms cycle
   // every ~28 minutes, and user_id is UNIQUE, so two same-named sign-ins could
   // collide and fail the whole upsert.
   const slug = (name ?? 'user').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'user';
   const handle = `${slug}-${crypto.randomUUID().slice(0, 8)}`;
 
+  // A garbage/deleted id must never block signup — just drop it silently and
+  // proceed with no referral, per the referral guards in the PRD.
+  let validReferredBy = null;
+  if (referredBy && isUuid(referredBy)) {
+    const referrer = await sql`
+      SELECT id FROM users WHERE id = ${referredBy}::uuid AND status = 'active'
+    `;
+    if (referrer[0]) validReferredBy = referrer[0].id;
+  }
+
   // Never RETURNING * here — the caller is the sign-in flow, which only needs the
   // id to put in the token. Returning the whole row leaked email/status.
+  // `(xmax = 0) AS inserted` is the standard Postgres trick to tell an actual
+  // insert apart from the ON CONFLICT DO UPDATE branch firing.
   const rows = await sql`
-    INSERT INTO users (user_id, name, email, icon)
-    VALUES (${handle}, ${name}, ${email}, ${icon})
+    INSERT INTO users (user_id, name, email, icon, referred_by)
+    VALUES (${handle}, ${name}, ${email}, ${icon}, ${validReferredBy})
     ON CONFLICT (email) DO UPDATE
       SET name = EXCLUDED.name, icon = EXCLUDED.icon, updated_at = NOW()
-    RETURNING id, user_id, name, icon
+    RETURNING id, user_id, name, icon, (xmax = 0) AS inserted
   `;
   return rows[0];
 };
