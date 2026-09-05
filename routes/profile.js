@@ -1,20 +1,24 @@
 const express = require('express');
 const router = express.Router();
 const profileService = require('../services/profileService');
+const userService = require('../services/userService');
 const { requireAuth, optionalAuth } = require('../middleware/auth');
 const { asyncHandler } = require('../utils/asyncHandler');
-const { requireUuid } = require('../utils/validate');
+const { requireHandle } = require('../utils/validate');
 const { NotFoundError, ForbiddenError } = require('../utils/errors');
 
 // ── View any profile (no auth required) ───────────────────
 // optionalAuth so the private-profile check below can recognise the owner, and so
 // email can be returned to the owner only.
-router.get('/:userId', optionalAuth, asyncHandler(async (req, res) => {
-  const userId = requireUuid(req.params.userId, 'userId');
+router.get('/:handle', optionalAuth, asyncHandler(async (req, res) => {
+  const handle = requireHandle(req.params.handle, 'handle');
 
-  const profile = await profileService.getByUserId(userId, req.userId ?? null, req.env);
+  const target = await userService.findByHandle(handle, req.env);
+  if (!target) throw new NotFoundError('Profile not found');
+
+  const profile = await profileService.getByUserId(target.id, req.userId ?? null, req.env);
   if (!profile) throw new NotFoundError('Profile not found');
-  if (profile.status === 'private' && req.userId !== userId) {
+  if (profile.status === 'private' && req.userId !== target.id) {
     throw new ForbiddenError('This profile is private');
   }
   res.json(profile);

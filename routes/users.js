@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const userService = require('../services/userService');
 const { asyncHandler } = require('../utils/asyncHandler');
-const { requireUuid } = require('../utils/validate');
+const { requireUuid, requireHandle } = require('../utils/validate');
 const { NotFoundError, ForbiddenError } = require('../utils/errors');
 
 // GET / (list every user) and POST / (create a user) were removed:
@@ -16,9 +16,12 @@ router.get('/search', asyncHandler(async (req, res) => {
   res.json(await userService.searchByName(query.slice(0, 100), req.userId, req.env));
 }));
 
-router.get('/:id', asyncHandler(async (req, res) => {
-  const id = requireUuid(req.params.id, 'id');
-  const user = await userService.findById(id, req.env);
+// Accepts the public slug or (for links already shared as a UUID) the raw id —
+// see userService.findByHandle. Distinct from the routes below, which are the
+// caller acting on their own account and always pass their own UUID.
+router.get('/:handle', asyncHandler(async (req, res) => {
+  const handle = requireHandle(req.params.handle, 'handle');
+  const user = await userService.findByHandle(handle, req.env);
   if (!user) throw new NotFoundError('User not found');
   res.json(user);
 }));

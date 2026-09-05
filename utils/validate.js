@@ -4,6 +4,19 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 const isUuid = (value) => typeof value === 'string' && UUID_RE.test(value);
 
+// The public handle used in URLs — `users.user_id` — lowercase slug characters
+// only. A raw UUID also matches this shape, which is deliberate: it lets a
+// handle-based lookup accept either without the caller having to know which
+// kind of identifier it was given (see userService.findByHandle).
+const HANDLE_RE = /^[a-z0-9-]{1,150}$/;
+
+const isHandle = (value) => typeof value === 'string' && HANDLE_RE.test(value);
+
+function requireHandle(value, field) {
+  if (!isHandle(value)) throw new ValidationError(`${field} must be a valid handle`);
+  return value;
+}
+
 /**
  * Validates a UUID and returns it lowercased. Canonical case matters: Postgres
  * compares uuids case-insensitively but JS `===` does not, so an uppercased uuid
@@ -38,4 +51,4 @@ function clampInt(raw, { fallback, min, max, field }) {
   return Math.min(Math.max(Number.parseInt(raw, 10), min), max);
 }
 
-module.exports = { isUuid, requireUuid, requireText, clampInt };
+module.exports = { isUuid, requireUuid, requireText, clampInt, isHandle, requireHandle };

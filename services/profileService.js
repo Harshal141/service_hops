@@ -34,6 +34,7 @@ const getByUserId = async (userId, viewerId, env) => {
       p.*,
       u.name,
       u.icon,
+      u.user_id,
       CASE WHEN ${isOwner} THEN u.email ELSE NULL END AS email
     FROM profile p
     JOIN users u ON u.id = p.id

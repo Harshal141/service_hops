@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const { getDb } = require('../config/db');
-const { isUuid } = require('../utils/validate');
+const { isHandle } = require('../utils/validate');
 
 // Columns safe to return to any authenticated caller. `email`, `status` and
 // `sub_status` are deliberately absent — a user directory must not double as an
@@ -11,6 +11,20 @@ const findById = async (id, env) => {
     SELECT id, user_id, name, icon, created_at
     FROM users
     WHERE id = ${id}::uuid
+  `;
+  return rows[0] ?? null;
+};
+
+// Resolves the public URL identifier — `user_id` (the slug) or, for
+// already-shared links, a raw UUID — to the user row. A transitional dual
+// lookup so switching routing to slugs doesn't 404 any link that's already
+// out in the wild.
+const findByHandle = async (handle, env) => {
+  const sql = getDb(env);
+  const rows = await sql`
+    SELECT id, user_id, name, icon, created_at
+    FROM users
+    WHERE (user_id = ${handle} OR id::text = ${handle}) AND status = 'active'
   `;
   return rows[0] ?? null;
 };
@@ -46,11 +60,14 @@ const upsert = async (userData, env) => {
   const handle = `${slug}-${crypto.randomUUID().slice(0, 8)}`;
 
   // A garbage/deleted id must never block signup — just drop it silently and
-  // proceed with no referral, per the referral guards in the PRD.
+  // proceed with no referral, per the referral guards in the PRD. `referredBy`
+  // comes from the `/invite/<handle>` link's slug now, not a UUID — accept
+  // either, since an already-shared invite link still carries the old UUID.
   let validReferredBy = null;
-  if (referredBy && isUuid(referredBy)) {
+  if (referredBy && isHandle(referredBy)) {
     const referrer = await sql`
-      SELECT id FROM users WHERE id = ${referredBy}::uuid AND status = 'active'
+      SELECT id FROM users
+      WHERE (user_id = ${referredBy} OR id::text = ${referredBy}) AND status = 'active'
     `;
     if (referrer[0]) validReferredBy = referrer[0].id;
   }
@@ -101,4 +118,4 @@ const searchByName = async (query, viewerId, env) => {
   `;
 };
 
-module.exports = { findById, update, remove, upsert, searchByName };
+module.exports = { findById, findByHandle, update, remove, upsert, searchByName };

@@ -1,10 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const connectionService = require('../services/connectionService');
+const userService = require('../services/userService');
 const { requireAuth } = require('../middleware/auth');
 const { asyncHandler } = require('../utils/asyncHandler');
-const { requireUuid, requireText, clampInt } = require('../utils/validate');
-const { ValidationError } = require('../utils/errors');
+const { requireUuid, requireHandle, requireText, clampInt } = require('../utils/validate');
+const { NotFoundError, ValidationError } = require('../utils/errors');
 
 const MAX_HOPS_CEILING = 6;   // "six degrees of separation" — the whole premise
 const LIMIT_CEILING = 200;
@@ -77,15 +78,17 @@ router.get('/reachable', asyncHandler(async (req, res) => {
 
 // Shortest chain of people between you and one target — powers the path view.
 // Defaults to the full 6 degrees, since you are asking about a specific person.
-router.get('/path/:targetId', asyncHandler(async (req, res) => {
-  const targetId = requireUuid(req.params.targetId, 'targetId');
-  if (targetId === req.userId) throw new ValidationError('That is you');
+router.get('/path/:handle', asyncHandler(async (req, res) => {
+  const handle = requireHandle(req.params.handle, 'handle');
+  const target = await userService.findByHandle(handle, req.env);
+  if (!target) throw new NotFoundError('User not found');
+  if (target.id === req.userId) throw new ValidationError('That is you');
 
   const maxHops = clampInt(req.query.maxHops, {
     fallback: MAX_HOPS_CEILING, min: 1, max: MAX_HOPS_CEILING, field: 'maxHops',
   });
 
-  const result = await connectionService.getPathTo(req.userId, targetId, maxHops, req.env);
+  const result = await connectionService.getPathTo(req.userId, target.id, maxHops, req.env);
   if (!result) return res.status(404).json({ error: `No path found within ${maxHops} hops` });
 
   res.json(result);
