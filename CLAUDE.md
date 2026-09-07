@@ -143,6 +143,10 @@ there is no way to detect the divergence.
 
 - Corrections go in a **new** `vN+1_*.sql`. Wrong column type in `v6`? Write `v7`.
 - Sequential, gapless, descriptive names: `v10_connection_index.sql`.
+- **Singular table and column names.** `v1` shipped plural (`users`, `accounts`, `sessions`,
+  `connections`) — that is grandfathered and never renamed, but every migration from `v7`
+  onward already moved to singular (`connection`, `profile_link`, `profile_experience`,
+  `profile_skill`, `user_flag`) and that is the rule going forward, not an accident.
 - Every file starts with a header stating: what it does, **which environments it targets**,
   and what it depends on.
 

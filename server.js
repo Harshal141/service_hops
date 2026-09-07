@@ -6,6 +6,7 @@ const authRouter = require('./routes/auth');
 const profileRouter = require('./routes/profile');
 const skillRouter = require('./routes/skill');
 const connectionRouter = require('./routes/connection');
+const flagRouter = require('./routes/flag');
 const { requireAuth } = require('./middleware/auth');
 const { attachEnv } = require('./middleware/env');
 const { errorHandler } = require('./middleware/errorHandler');
@@ -56,6 +57,9 @@ app.use('/auth', authRouter);
 
 // Users routes (requires auth)
 app.use('/users', requireAuth, usersRouter);
+
+// Flag routes — shared per-user onboarding/checklist store (requires auth)
+app.use('/flag', requireAuth, flagRouter);
 
 // Profile routes (mixed — GET /:userId is public, writes require auth)
 app.use('/profile', profileRouter);
