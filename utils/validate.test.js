@@ -1,4 +1,4 @@
-const { requireUuid, clampInt } = require('./validate');
+const { requireUuid, requireText, clampInt } = require('./validate');
 const { ValidationError } = require('./errors');
 
 describe('requireUuid', () => {
@@ -23,5 +23,21 @@ describe('clampInt', () => {
     expect(() => clampInt('abc', { fallback: 3, min: 1, max: 6, field: 'maxHops' })).toThrow(
       ValidationError,
     );
+  });
+});
+
+describe('requireText', () => {
+  it('trims, and rejects missing, blank or over-long text', () => {
+    expect(requireText('  hi ', 'note')).toBe('hi');
+    expect(() => requireText(undefined, 'note')).toThrow(ValidationError);
+    expect(() => requireText('   ', 'note')).toThrow(ValidationError);
+    expect(() => requireText('abcd', 'note', { max: 3 })).toThrow(ValidationError);
+  });
+
+  it('optional: missing or blank is null, a non-string is still rejected', () => {
+    expect(requireText(null, 'bio', { optional: true })).toBeNull();
+    expect(requireText('  ', 'bio', { optional: true })).toBeNull();
+    expect(requireText(' x ', 'bio', { optional: true })).toBe('x');
+    expect(() => requireText(5, 'bio', { optional: true })).toThrow('bio must be text');
   });
 });
