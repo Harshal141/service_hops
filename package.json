@@ -17,7 +17,10 @@
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "jose": "^6.2.8",
-    "nodemon": "^3.1.11"
+    "multer": "2.4.0",
+    "nodemon": "^3.1.11",
+    "unpdf": "1.7.0",
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "cross-env": "^10.1.0",

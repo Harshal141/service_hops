@@ -4,6 +4,7 @@ const cors = require('cors');
 const usersRouter = require('./routes/users');
 const authRouter = require('./routes/auth');
 const profileRouter = require('./routes/profile');
+const profileImportRouter = require('./routes/profileImport');
 const skillRouter = require('./routes/skill');
 const connectionRouter = require('./routes/connection');
 const flagRouter = require('./routes/flag');
@@ -36,11 +37,16 @@ app.use((req, res, next) => {
 
 app.use(cors({ origin: allowedOrigins, credentials: true }));
 
-app.use(express.json({ limit: '32kb' }));
-
 // Resolve X-Env once, before auth — requireAuth checks the token's env claim
 // against it, so this must run first.
 app.use(attachEnv);
+
+// Resume import: multipart upload (multer) and a larger JSON body for apply, so it is
+// mounted ahead of the global 32kb JSON parser, and before profileRouter (whose public
+// GET /:handle would otherwise claim /profile/* first). Auth is inside the router.
+app.use('/profile/import', profileImportRouter);
+
+app.use(express.json({ limit: '32kb' }));
 
 testDBConnection('stage');
 testDBConnection('prod');

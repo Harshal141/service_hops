@@ -1,0 +1,40 @@
+{
+  "is_resume": true,
+  "full_name": "Alex Synthetic",
+  "headline": "Senior Software Engineer |",
+  "location": "Bengaluru, India",
+  "summary": "Backend engineer with eight years building payment systems, data pipelines and internal developer platforms. Comfortable owning services end to end, from design docs to on-call.",
+  "links": [
+    { "type": "other", "url": "https://www.example-portfolio-site.dev/projects/distributed-systems/case-studies/realtime-payments-ledger-2022" }
+  ],
+  "experience": [
+    {
+      "company": "Acme Payments",
+      "role": "Staff Engineer",
+      "start": "2021-03",
+      "end": null,
+      "is_current": true,
+      "description": "Led migration of the ledger infrastructure to an event-sourced design processing 4M transactions per day."
+    },
+    {
+      "company": "Globex",
+      "role": "Software Engineer",
+      "start": "2021-03",
+      "end": "2022-06",
+      "is_current": false,
+      "description": "Built the internal feature-flag service and reduced deploy rollback time by 60 percent."
+    },
+    {
+      "company": "Initech",
+      "role": "Engineer",
+      "start": "2019",
+      "end": "2021",
+      "is_current": false,
+      "description": "Maintained TPS report generation pipelines in Java and Kotlin."
+    }
+  ],
+  "education": [
+    { "institution": "Example Institute of Technology", "degree": "B.Tech Computer Science", "start_year": "2015", "end_year": "2019" }
+  ],
+  "skills": ["Go", "Java", "Kotlin", "PostgreSQL", "Kafka", "Kubernetes", "Terraform", "AWS"]
+}

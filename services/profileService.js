@@ -20,6 +20,12 @@ async function rejectChildFailure(sql, kind, rowId, userId) {
   throw new NotFoundError(`${kind} not found`);
 }
 
+// DATE columns as 'YYYY-MM-DD' text: the driver turns a DATE into a JS Date at server-local
+// midnight, which serializes as the previous day when the server runs east of UTC.
+const EXPERIENCE_COLUMNS = `id, profile_id, company, role,
+  to_char(started_at, 'YYYY-MM-DD') AS started_at, to_char(ended_at, 'YYYY-MM-DD') AS ended_at,
+  currently_working, description, sort_order, created_at`;
+
 // ── Profile ────────────────────────────────────────────────
 
 // `viewerId` is the authenticated caller, or null. Email is returned only to the
@@ -44,7 +50,7 @@ const getByUserId = async (userId, viewerId, env) => {
 
   const [links, experience, education, skills] = await Promise.all([
     sql`SELECT * FROM profile_link WHERE profile_id = ${userId} ORDER BY sort_order`,
-    sql`SELECT * FROM profile_experience WHERE profile_id = ${userId} ORDER BY sort_order`,
+    sql`SELECT ${sql.unsafe(EXPERIENCE_COLUMNS)} FROM profile_experience WHERE profile_id = ${userId} ORDER BY sort_order`,
     sql`SELECT * FROM profile_education WHERE profile_id = ${userId} ORDER BY sort_order`,
     sql`
       SELECT s.id, s.name, s.level, s.parent_id
@@ -69,15 +75,21 @@ const upsert = async (userId, data, env) => {
     { key: 'education',  visible: true },
   ];
 
+  // Defaults apply to a new row only. On update, an omitted field keeps its saved value:
+  // comparing against EXCLUDED would see the default and overwrite the saved order/status.
+  const statusIn = status ?? null;
+  const sectionConfigIn = section_config ? JSON.stringify(section_config) : null;
+
   const [profile] = await sql`
     INSERT INTO profile (id, bio, title, location, status, section_config)
-    VALUES (${userId}, ${bio ?? null}, ${title ?? null}, ${location ?? null}, ${status ?? 'public'}, ${JSON.stringify(section_config ?? defaultSectionConfig)})
+    VALUES (${userId}, ${bio ?? null}, ${title ?? null}, ${location ?? null},
+            ${statusIn ?? 'public'}, ${sectionConfigIn ?? JSON.stringify(defaultSectionConfig)})
     ON CONFLICT (id) DO UPDATE
-      SET bio            = COALESCE(EXCLUDED.bio,            profile.bio),
-          title          = COALESCE(EXCLUDED.title,          profile.title),
-          location       = COALESCE(EXCLUDED.location,       profile.location),
-          status         = COALESCE(EXCLUDED.status,         profile.status),
-          section_config = COALESCE(EXCLUDED.section_config, profile.section_config),
+      SET bio            = COALESCE(EXCLUDED.bio,      profile.bio),
+          title          = COALESCE(EXCLUDED.title,    profile.title),
+          location       = COALESCE(EXCLUDED.location, profile.location),
+          status         = COALESCE(${statusIn}::text, profile.status),
+          section_config = COALESCE(${sectionConfigIn}::jsonb, profile.section_config),
           updated_at     = NOW()
     RETURNING *
   `;
@@ -132,7 +144,7 @@ const addExperience = async (userId, data, env) => {
   const [row] = await sql`
     INSERT INTO profile_experience (profile_id, company, role, started_at, ended_at, currently_working, description, sort_order)
     VALUES (${userId}, ${company}, ${role}, ${started_at ?? null}, ${ended_at ?? null}, ${currently_working ?? false}, ${description ?? null}, ${sort_order ?? 0})
-    RETURNING *
+    RETURNING ${sql.unsafe(EXPERIENCE_COLUMNS)}
   `;
   return row;
 };
@@ -148,7 +160,7 @@ const updateExperience = async (userId, expId, data, env) => {
         currently_working = ${currently_working ?? false},
         description = ${description ?? null}, sort_order = ${sort_order ?? 0}
     WHERE id = ${expId} AND profile_id = ${userId}
-    RETURNING *
+    RETURNING ${sql.unsafe(EXPERIENCE_COLUMNS)}
   `;
   if (!row) await rejectChildFailure(sql, 'experience', expId, userId);
   return row;

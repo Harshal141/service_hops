@@ -27,9 +27,15 @@ function requireUuid(value, field) {
   return value.toLowerCase();
 }
 
-/** Requires a non-blank string and returns it trimmed. Rejects whitespace-only. */
-function requireText(value, field, { max = 1000 } = {}) {
-  if (typeof value !== 'string') throw new ValidationError(`${field} is required`);
+/**
+ * Requires a non-blank string and returns it trimmed. Rejects whitespace-only.
+ * With `optional`, missing or blank returns null instead; a non-string is still rejected.
+ */
+function requireText(value, field, { max = 1000, optional = false } = {}) {
+  if (optional && (value == null || (typeof value === 'string' && !value.trim()))) return null;
+  if (typeof value !== 'string') {
+    throw new ValidationError(optional ? `${field} must be text` : `${field} is required`);
+  }
   const trimmed = value.trim();
   if (!trimmed) throw new ValidationError(`${field} cannot be empty`);
   if (trimmed.length > max) {

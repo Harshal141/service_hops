@@ -43,7 +43,7 @@ Modules that belong there:
 
 | Module | Purpose |
 |---|---|
-| `utils/errors.js` | `AppError` base + `NotFoundError`, `ForbiddenError`, `ValidationError`, `ConflictError` |
+| `utils/errors.js` | `AppError` base (optional `code`) + `ValidationError`, `ForbiddenError`, `NotFoundError`, `ConflictError`, `PayloadTooLargeError`, `UnprocessableError`, `TooManyRequestsError`, `UpstreamError` |
 | `utils/asyncHandler.js` | Wraps an async route handler so rejections reach the error middleware |
 | `utils/validate.js` | Small input assertions — `isUuid`, `requireFields`, `clampInt` |
 | `utils/pairMatch.js` | The `LEAST/GREATEST` user-pair predicate, currently written out 8× — 6 in `connectionService`, 2 in `userService` |
@@ -82,7 +82,7 @@ router.put('/experience/:id', asyncHandler(async (req, res) => {
 - **`'Not found or not yours'` is two different errors.** Split them — a missing row is 404,
   someone else's row is 403. Returning 400 for both (the current behaviour) makes the API
   undebuggable from the FE.
-- One error envelope, always: `{ "error": "<message>" }`. See §8.
+- One error envelope, always: `{ "error": "<message>" }`, plus `code` when set. See §8.
 
 ---
 
@@ -165,9 +165,14 @@ there is no way to detect the divergence.
   `ON CONFLICT DO NOTHING`. Re-running a migration should not destroy anything.
 - **Destructive statements need a note.** `v7` drops the unused v1 `connections` table and
   explains why it is safe. Every `DROP` / `ALTER ... TYPE` gets that treatment.
-- There is no migration runner and no tracking table. Until there is, the applied version
-  per environment must be recorded somewhere durable — a `schema_migrations` table is the
-  right fix and should land as its own migration.
+- There is no migration runner. Applied versions are tracked in the `schema_migration` table
+  (singular, added by `v15_schema_migration.sql`, which backfills v1–v14). **Every migration
+  from v15 on ends with its own
+  `INSERT INTO schema_migration (version) VALUES ('vN_name') ON CONFLICT (version) DO NOTHING;`**
+  so "was it run on prod?" is
+  `SELECT version, applied_at FROM schema_migration ORDER BY applied_at DESC LIMIT 5;`.
+- A BE deploy that needs a new migration is not promoted to prod until that migration has
+  been run on the prod Neon branch and shows up in `schema_migration`.
 
 ---
 
@@ -193,8 +198,12 @@ anything near it.
 
 The FE depends on these. Changing one is a cross-repo change.
 
-- **Error envelope:** `{ "error": "<human-readable message>" }`. Always. Never a bare string,
-  never `{ message }`, never a 200 carrying an error body.
+- **Error envelope:** `{ "error": "<human-readable message>", "code": "<machine_code>" }`.
+  `error` always; `code` is optional and additive — present when the FE must branch on the
+  failure (e.g. `file_too_big`, `already_processing`, `daily_cap`, `ai_failed`). Set it via
+  the typed error's `code` argument (`new ConflictError(msg, 'already_applied')`); codes are
+  part of the contract, so renaming one is a cross-repo change. Never a bare string, never
+  `{ message }`, never a 200 carrying an error body.
 - **Status codes:**
   | Code | Meaning |
   |---|---|
@@ -206,7 +215,11 @@ The FE depends on these. Changing one is a cross-repo change.
   | 403 | Authenticated but not permitted (someone else's row, private profile) |
   | 404 | Resource does not exist |
   | 409 | Conflict — already connected, duplicate request |
+  | 413 | Payload too large (upload over the limit) |
+  | 422 | Well-formed but unusable input (scanned PDF, not a resume) |
+  | 429 | Rate limited / quota — sends `Retry-After` |
   | 500 | Unexpected — generic message to the client, full detail in the log |
+  | 502 | An upstream dependency (AI provider) failed — never carries its raw error |
 - Responses use `snake_case` keys, matching the DB columns. The FE normalises at its
   boundary; the BE does not camelCase on the way out.
 - A list endpoint returns a JSON array, never `{ items: [...] }`.
