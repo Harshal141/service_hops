@@ -1,24 +1,5 @@
 const { getDb } = require('../config/db');
-const { ValidationError, ForbiddenError, NotFoundError } = require('../utils/errors');
-
-// Child rows are always written with `WHERE id = … AND profile_id = …`, so a
-// zero-row result means either "no such row" or "someone else's row". Those are
-// different answers and deserve different statuses, so on the failure path only,
-// ask which one it was.
-const CHILD_TABLES = {
-  link: 'profile_link',
-  experience: 'profile_experience',
-  education: 'profile_education',
-};
-
-async function rejectChildFailure(sql, kind, rowId, userId) {
-  const table = CHILD_TABLES[kind];
-  const rows = await sql.query(`SELECT profile_id FROM ${table} WHERE id = $1`, [rowId]);
-  const row = rows[0];
-  if (!row) throw new NotFoundError(`${kind} not found`);
-  if (row.profile_id !== userId) throw new ForbiddenError(`That ${kind} is not yours`);
-  throw new NotFoundError(`${kind} not found`);
-}
+const { ValidationError, ForbiddenError, NotFoundError, ConflictError } = require('../utils/errors');
 
 // DATE columns as 'YYYY-MM-DD' text: the driver turns a DATE into a JS Date at server-local
 // midnight, which serializes as the previous day when the server runs east of UTC.
@@ -63,157 +44,134 @@ const getByUserId = async (userId, viewerId, env) => {
   return { ...profile, links, experience, education, skills };
 };
 
-const upsert = async (userId, data, env) => {
-  const sql = getDb(env);
-  const { bio, title, location, status, section_config } = data;
+// ── Save (PATCH /profile) ──────────────────────────────────
 
-  const defaultSectionConfig = [
-    { key: 'links',      visible: true },
-    { key: 'about',      visible: true },
-    { key: 'skills',     visible: true },
-    { key: 'experience', visible: true },
-    { key: 'education',  visible: true },
-  ];
+// Serializes every write to one user's profile (this save and the resume import's apply), so
+// two saves can't both pass the stale-write check against the same version.
+const PROFILE_WRITE_LOCK_KEY = 'profile_apply';
 
-  // Defaults apply to a new row only. On update, an omitted field keeps its saved value:
-  // comparing against EXCLUDED would see the default and overwrite the saved order/status.
-  const statusIn = status ?? null;
-  const sectionConfigIn = section_config ? JSON.stringify(section_config) : null;
-
-  const [profile] = await sql`
-    INSERT INTO profile (id, bio, title, location, status, section_config)
-    VALUES (${userId}, ${bio ?? null}, ${title ?? null}, ${location ?? null},
-            ${statusIn ?? 'public'}, ${sectionConfigIn ?? JSON.stringify(defaultSectionConfig)})
-    ON CONFLICT (id) DO UPDATE
-      SET bio            = COALESCE(EXCLUDED.bio,      profile.bio),
-          title          = COALESCE(EXCLUDED.title,    profile.title),
-          location       = COALESCE(EXCLUDED.location, profile.location),
-          status         = COALESCE(${statusIn}::text, profile.status),
-          section_config = COALESCE(${sectionConfigIn}::jsonb, profile.section_config),
-          updated_at     = NOW()
-    RETURNING *
-  `;
-  return profile;
+// The list sections a save can replace. Table and column names are constants, never input, so
+// building SQL from them is safe; adding a section is one entry here plus its validator.
+const SECTIONS = {
+  links: {
+    table: 'profile_link',
+    columns: { type: 'text', url: 'text', sort_order: 'smallint' },
+  },
+  experience: {
+    table: 'profile_experience',
+    columns: {
+      company: 'text', role: 'text', started_at: 'date', ended_at: 'date',
+      currently_working: 'boolean', description: 'text', sort_order: 'smallint',
+    },
+  },
+  education: {
+    table: 'profile_education',
+    columns: { institution: 'text', degree: 'text', year: 'text', sort_order: 'smallint' },
+  },
 };
 
-// ── Links ──────────────────────────────────────────────────
+// $1 user id · $2 scalar fields (jsonb, only the keys being set) · $3 updated_at the client
+// edited (or null) · then one jsonb param per section: its final rows, or null to leave it alone.
+const SECTION_PARAM = Object.fromEntries(Object.keys(SECTIONS).map((key, i) => [key, `$${i + 4}::jsonb`]));
 
-const addLink = async (userId, data, env) => {
+function sectionCtes(key) {
+  const { table, columns } = SECTIONS[key];
+  const param = SECTION_PARAM[key];
+  const cols = Object.keys(columns);
+  const recordType = ['id int', ...cols.map((c) => `${c} ${columns[c]}`)].join(', ');
+  const t = cols.map((c) => `t.${c}`).join(', ');
+  const i = cols.map((c) => `i.${c}`).join(', ');
+  return {
+    input: `in_${key} AS (SELECT * FROM jsonb_to_recordset(COALESCE(${param}, '[]')) AS x(${recordType}))`,
+    // every incoming id must be one of this user's rows, or the whole save is refused
+    owned: `NOT EXISTS (SELECT 1 FROM in_${key} i WHERE i.id IS NOT NULL AND NOT EXISTS (
+              SELECT 1 FROM ${table} t WHERE t.id = i.id AND t.profile_id = $1))`,
+    writes: [
+      // rows left out of a sent list are deleted; an unsent list (null) deletes nothing
+      `del_${key} AS (DELETE FROM ${table} t USING gate g
+         WHERE ${param} IS NOT NULL AND t.profile_id = g.user_id
+           AND NOT EXISTS (SELECT 1 FROM in_${key} i WHERE i.id = t.id))`,
+      // only rows whose values actually changed are rewritten
+      `upd_${key} AS (UPDATE ${table} t SET (${cols.join(', ')}) = (${i})
+         FROM in_${key} i, gate g
+         WHERE t.id = i.id AND t.profile_id = g.user_id AND (${t}) IS DISTINCT FROM (${i}))`,
+      `ins_${key} AS (INSERT INTO ${table} (profile_id, ${cols.join(', ')})
+         SELECT g.user_id, ${i} FROM in_${key} i, gate g WHERE i.id IS NULL)`,
+    ],
+  };
+}
+
+const SECTION_SQL = Object.keys(SECTIONS).map(sectionCtes);
+
+// One statement, gated: if the client's version is stale or any id isn't the user's, the gate
+// is empty and nothing below writes. A present key in $2 sets its column (null clears it); an
+// absent key keeps the stored value. The profile UPDATE always runs, so its trigger bumps
+// updated_at on every save, including list-only ones, which is what the stale check relies on.
+const SAVE_SQL = `
+WITH
+${SECTION_SQL.map((s) => s.input).join(',\n')},
+gate AS (
+  SELECT $1::uuid AS user_id
+  WHERE NOT EXISTS (
+          SELECT 1 FROM profile p
+          WHERE p.id = $1 AND $3::timestamptz IS NOT NULL
+            -- the client holds a millisecond JS timestamp; Postgres keeps microseconds
+            AND date_trunc('milliseconds', p.updated_at) > $3::timestamptz)
+    AND ${SECTION_SQL.map((s) => s.owned).join('\n    AND ')}
+),
+prof AS (
+  UPDATE profile p SET
+    bio            = CASE WHEN $2::jsonb ? 'bio'            THEN $2::jsonb->>'bio'            ELSE p.bio END,
+    title          = CASE WHEN $2::jsonb ? 'title'          THEN $2::jsonb->>'title'          ELSE p.title END,
+    location       = CASE WHEN $2::jsonb ? 'location'       THEN $2::jsonb->>'location'       ELSE p.location END,
+    section_config = CASE WHEN $2::jsonb ? 'section_config' THEN $2::jsonb->'section_config' ELSE p.section_config END
+  FROM gate g WHERE p.id = g.user_id
+),
+usr AS (
+  UPDATE users u SET name = $2::jsonb->>'name'
+  FROM gate g WHERE u.id = g.user_id AND $2::jsonb ? 'name'
+),
+${SECTION_SQL.flatMap((s) => s.writes).join(',\n')}
+SELECT count(*)::int AS saved FROM gate`;
+
+/** After a refused save: why. Outside the transaction, so it can race; the fallback is 404. */
+async function saveRefusal(sql, userId, patch) {
+  const idsOf = (key) => (patch.sections[key] ?? []).flatMap((row) => (row.id ? [row.id] : []));
+  const foreign = Object.entries(SECTIONS).map(([key, { table }]) => {
+    const ids = idsOf(key);
+    return ids.length ? sql.query(`SELECT 1 FROM ${table} WHERE id = ANY($1::int[]) AND profile_id <> $2 LIMIT 1`, [ids, userId]) : [];
+  });
+  const [stale, ...owned] = await Promise.all([
+    patch.updatedAt
+      ? sql.query(`SELECT 1 FROM profile WHERE id = $1 AND date_trunc('milliseconds', updated_at) > $2::timestamptz`, [userId, patch.updatedAt])
+      : [],
+    ...foreign,
+  ]);
+  if (stale.length) throw new ConflictError('Your profile changed since you started editing. Reload and try again.', 'stale_profile');
+  if (owned.some((rows) => rows.length)) throw new ForbiddenError('That entry is not yours');
+  throw new NotFoundError('Some entries no longer exist. Reload and try again.');
+}
+
+/**
+ * Applies a validated patch (see utils/profileFields validateProfilePatch) in one transaction:
+ * [per-user lock, make sure the profile row exists, the gated save]. One round trip; everything
+ * lands or nothing does. Returns the saved profile, same shape as GET.
+ */
+const savePatch = async (userId, patch, env) => {
   const sql = getDb(env);
-  const { type, url, sort_order } = data;
-
-  const [link] = await sql`
-    INSERT INTO profile_link (profile_id, type, url, sort_order)
-    VALUES (${userId}, ${type}, ${url}, ${sort_order ?? 0})
-    RETURNING *
-  `;
-  return link;
-};
-
-const updateLink = async (userId, linkId, data, env) => {
-  const sql = getDb(env);
-  const { type, url, sort_order } = data;
-
-  const [link] = await sql`
-    UPDATE profile_link
-    SET type = ${type}, url = ${url}, sort_order = ${sort_order ?? 0}
-    WHERE id = ${linkId} AND profile_id = ${userId}
-    RETURNING *
-  `;
-  if (!link) await rejectChildFailure(sql, 'link', linkId, userId);
-  return link;
-};
-
-const deleteLink = async (userId, linkId, env) => {
-  const sql = getDb(env);
-
-  const [deleted] = await sql`
-    DELETE FROM profile_link
-    WHERE id = ${linkId} AND profile_id = ${userId}
-    RETURNING id
-  `;
-  if (!deleted) await rejectChildFailure(sql, 'link', linkId, userId);
-};
-
-// ── Experience ─────────────────────────────────────────────
-
-const addExperience = async (userId, data, env) => {
-  const sql = getDb(env);
-  const { company, role, started_at, ended_at, currently_working, description, sort_order } = data;
-
-  const [row] = await sql`
-    INSERT INTO profile_experience (profile_id, company, role, started_at, ended_at, currently_working, description, sort_order)
-    VALUES (${userId}, ${company}, ${role}, ${started_at ?? null}, ${ended_at ?? null}, ${currently_working ?? false}, ${description ?? null}, ${sort_order ?? 0})
-    RETURNING ${sql.unsafe(EXPERIENCE_COLUMNS)}
-  `;
-  return row;
-};
-
-const updateExperience = async (userId, expId, data, env) => {
-  const sql = getDb(env);
-  const { company, role, started_at, ended_at, currently_working, description, sort_order } = data;
-
-  const [row] = await sql`
-    UPDATE profile_experience
-    SET company = ${company}, role = ${role}, started_at = ${started_at ?? null},
-        ended_at = ${currently_working ? null : (ended_at ?? null)},
-        currently_working = ${currently_working ?? false},
-        description = ${description ?? null}, sort_order = ${sort_order ?? 0}
-    WHERE id = ${expId} AND profile_id = ${userId}
-    RETURNING ${sql.unsafe(EXPERIENCE_COLUMNS)}
-  `;
-  if (!row) await rejectChildFailure(sql, 'experience', expId, userId);
-  return row;
-};
-
-const deleteExperience = async (userId, expId, env) => {
-  const sql = getDb(env);
-
-  const [deleted] = await sql`
-    DELETE FROM profile_experience
-    WHERE id = ${expId} AND profile_id = ${userId}
-    RETURNING id
-  `;
-  if (!deleted) await rejectChildFailure(sql, 'experience', expId, userId);
-};
-
-// ── Education ──────────────────────────────────────────────
-
-const addEducation = async (userId, data, env) => {
-  const sql = getDb(env);
-  const { institution, degree, year, sort_order } = data;
-
-  const [row] = await sql`
-    INSERT INTO profile_education (profile_id, institution, degree, year, sort_order)
-    VALUES (${userId}, ${institution}, ${degree}, ${year ?? null}, ${sort_order ?? 0})
-    RETURNING *
-  `;
-  return row;
-};
-
-const updateEducation = async (userId, eduId, data, env) => {
-  const sql = getDb(env);
-  const { institution, degree, year, sort_order } = data;
-
-  const [row] = await sql`
-    UPDATE profile_education
-    SET institution = ${institution}, degree = ${degree}, year = ${year ?? null}, sort_order = ${sort_order ?? 0}
-    WHERE id = ${eduId} AND profile_id = ${userId}
-    RETURNING *
-  `;
-  if (!row) await rejectChildFailure(sql, 'education', eduId, userId);
-  return row;
-};
-
-const deleteEducation = async (userId, eduId, env) => {
-  const sql = getDb(env);
-
-  const [deleted] = await sql`
-    DELETE FROM profile_education
-    WHERE id = ${eduId} AND profile_id = ${userId}
-    RETURNING id
-  `;
-  if (!deleted) await rejectChildFailure(sql, 'education', eduId, userId);
+  const results = await sql.transaction([
+    sql.query(`SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2::text))`, [PROFILE_WRITE_LOCK_KEY, userId]),
+    // a first save may come before any profile row exists; an empty row is harmless if refused
+    sql.query(`INSERT INTO profile (id) VALUES ($1) ON CONFLICT (id) DO NOTHING`, [userId]),
+    sql.query(SAVE_SQL, [
+      userId,
+      JSON.stringify(patch.fields),
+      patch.updatedAt,
+      ...Object.keys(SECTIONS).map((key) => (patch.sections[key] ? JSON.stringify(patch.sections[key]) : null)),
+    ]),
+  ]);
+  if (!results[2][0].saved) await saveRefusal(sql, userId, patch);
+  return getByUserId(userId, userId, env);
 };
 
 // ── Skills ─────────────────────────────────────────────────
@@ -277,11 +235,9 @@ const getDefaultSkills = async (env) => {
 };
 
 module.exports = {
+  PROFILE_WRITE_LOCK_KEY,
   getByUserId,
-  upsert,
-  addLink, updateLink, deleteLink,
-  addExperience, updateExperience, deleteExperience,
-  addEducation, updateEducation, deleteEducation,
+  savePatch,
   addSkill, removeSkill,
   searchSkills, getDefaultSkills,
 };

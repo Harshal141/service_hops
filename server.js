@@ -46,6 +46,10 @@ app.use(attachEnv);
 // GET /:handle would otherwise claim /profile/* first). Auth is inside the router.
 app.use('/profile/import', profileImportRouter);
 
+// The profile editor saves the whole profile in one PATCH (15 roles x 5000-char descriptions can
+// pass 32kb). Parsed here first; the global parser below skips a body that is already parsed.
+app.patch('/profile', express.json({ limit: '256kb' }));
+
 app.use(express.json({ limit: '32kb' }));
 
 testDBConnection('stage');

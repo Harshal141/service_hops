@@ -1,4 +1,4 @@
-const { isIsoDate, isEduYear, parseHttpUrl, validateImportPayload } = require('./profileFields');
+const { isIsoDate, isEduYear, parseHttpUrl, validateImportPayload, validateProfilePatch } = require('./profileFields');
 const { ValidationError } = require('./errors');
 
 describe('shape checks', () => {
@@ -86,5 +86,46 @@ describe('validateImportPayload', () => {
   };
   for (const [name, body] of Object.entries(rejects)) {
     it(`rejects: ${name}`, () => expect(() => validateImportPayload(body)).toThrow(ValidationError));
+  }
+});
+
+describe('validateProfilePatch', () => {
+  it('keeps only sent keys, trims, numbers rows and carries ids', () => {
+    const v = validateProfilePatch({
+      name: ' Jane ',
+      bio: '  ',
+      links: [
+        { id: 9, type: 'github', url: 'https://github.com/jane', profile_id: 'x', created_at: 'y' },
+        { type: 'other', url: 'https://jane.dev' },
+      ],
+      updated_at: '2026-10-02T15:17:10.500Z',
+    });
+    // bio blank clears it; title/location/experience/education were not sent, so they stay absent
+    expect(v).toEqual({
+      fields: { name: 'Jane', bio: null },
+      sections: {
+        links: [
+          { id: 9, type: 'github', url: 'https://github.com/jane', sort_order: 0 },
+          { type: 'other', url: 'https://jane.dev', sort_order: 1 },
+        ],
+      },
+      updatedAt: '2026-10-02T15:17:10.500Z',
+    });
+  });
+
+  const link = (extra = {}) => ({ type: 'other', url: 'https://a.com', ...extra });
+  const rejects = {
+    'nothing to save': { updated_at: '2026-10-02T15:17:10.500Z' },
+    'empty name': { name: '  ' },
+    'more than 10 links': { links: Array.from({ length: 11 }, () => link()) },
+    'link type not allowed': { links: [link({ type: 'myspace' })] },
+    'non-integer id': { links: [link({ id: '9' })] },
+    'same id twice': { links: [link({ id: 9 }), link({ id: 9 })] },
+    'invalid row': { experience: [{ id: 3, company: 'Acme' }] },
+    'incomplete section_config': { section_config: [{ key: 'about', visible: true }] },
+    'bad updated_at': { bio: 'x', updated_at: 'yesterday' },
+  };
+  for (const [name, body] of Object.entries(rejects)) {
+    it(`rejects: ${name}`, () => expect(() => validateProfilePatch(body)).toThrow(ValidationError));
   }
 });

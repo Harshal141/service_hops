@@ -3,9 +3,10 @@
 
 const { getDb } = require('../config/db');
 const { AI } = require('../config/ai');
+// Same lock as the profile editor's save, so an import apply and a save never interleave.
+const { PROFILE_WRITE_LOCK_KEY: APPLY_LOCK_KEY } = require('./profileService');
 
 const SLOT_LOCK_KEY = 'ai_enrichment_slot';
-const APPLY_LOCK_KEY = 'profile_apply';
 
 const clip = (s, n) => (s == null ? null : String(s).slice(0, n));
 

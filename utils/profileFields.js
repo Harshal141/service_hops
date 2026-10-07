@@ -140,12 +140,95 @@ function validateImportPayload(body) {
   };
 }
 
+// ── profile edit (PATCH /profile) ──────────────────────────
+
+const SECTION_KEYS = Object.freeze(['links', 'about', 'skills', 'experience', 'education']);
+
+const has = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
+
+function validateSectionConfig(value) {
+  if (!Array.isArray(value) || value.length !== SECTION_KEYS.length) {
+    throw new ValidationError(`section_config must list all ${SECTION_KEYS.length} sections`);
+  }
+  const config = value.map((raw) => {
+    const s = item(raw, 'section_config');
+    if (!SECTION_KEYS.includes(s.key)) throw new ValidationError('section_config has an unknown section');
+    if (typeof s.visible !== 'boolean') throw new ValidationError('section visible must be true or false');
+    return { key: s.key, visible: s.visible };
+  });
+  if (new Set(config.map((s) => s.key)).size !== config.length) {
+    throw new ValidationError('section_config lists a section twice');
+  }
+  return config;
+}
+
+/**
+ * One section's rows as their final state: a row with `id` is an existing row, one without is
+ * new. Reuses the import validators, so both write paths enforce the same field rules.
+ */
+function sectionRows(value, field, validateRow) {
+  const ids = new Set();
+  return list(value, field).map((raw, index) => {
+    const row = { ...validateRow(raw), sort_order: index };
+    if (raw.id === undefined || raw.id === null) return row;
+    if (!Number.isInteger(raw.id) || raw.id <= 0) throw new ValidationError(`${field} ids must be positive integers`);
+    if (ids.has(raw.id)) throw new ValidationError(`${field} lists the same entry twice`);
+    ids.add(raw.id);
+    return { ...row, id: raw.id };
+  });
+}
+
+const PATCH_SECTIONS = Object.freeze({
+  links: validateLink,
+  experience: validateExperience,
+  education: validateEducation,
+});
+
+/**
+ * Validates PATCH /profile:
+ *   { name?, bio?, title?, location?, section_config?, links?, experience?, education?, updated_at? }
+ * Every key is optional and an absent key is left alone. A present text field is set (blank
+ * clears it, except name). A present list is that section's final state; sort_order is the
+ * array position. updated_at is the version the client edited, for the stale-write check.
+ */
+function validateProfilePatch(body) {
+  if (!isObject(body)) throw new ValidationError('Request body must be an object');
+
+  const fields = {};
+  if (has(body, 'name')) fields.name = text(body.name, 'name');
+  for (const key of ['bio', 'title', 'location']) {
+    if (has(body, key)) fields[key] = optionalText(body[key], key);
+  }
+  if (has(body, 'section_config')) fields.section_config = validateSectionConfig(body.section_config);
+
+  const sections = {};
+  for (const [key, validateRow] of Object.entries(PATCH_SECTIONS)) {
+    if (has(body, key)) sections[key] = sectionRows(body[key], key, validateRow);
+  }
+
+  if (!Object.keys(fields).length && !Object.keys(sections).length) {
+    throw new ValidationError('Nothing to save');
+  }
+
+  let updatedAt = null;
+  if (body.updated_at !== undefined && body.updated_at !== null) {
+    if (typeof body.updated_at !== 'string' || Number.isNaN(Date.parse(body.updated_at))) {
+      throw new ValidationError('updated_at must be a timestamp');
+    }
+    updatedAt = body.updated_at;
+  }
+
+  return { fields, sections, updatedAt };
+}
+
 module.exports = {
   FIELD_LIMITS,
   LINK_TYPES,
   MAX_ITEMS,
+  SECTION_KEYS,
   isIsoDate,
   isEduYear,
   parseHttpUrl,
   validateImportPayload,
+  validateProfilePatch,
 };
