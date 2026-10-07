@@ -1,7 +1,7 @@
 const { MulterError } = require('multer');
 const { AppError } = require('../utils/errors');
 
-// Postgres error codes that correspond to a client mistake rather than a bug.
+// Postgres error codes with a meaningful status — a client mistake, or a timeout — rather than a bug.
 // The client gets the generic meaning; the driver's message stays in the log,
 // because it contains column names, constraint names and sometimes values.
 const PG_STATUS = {
@@ -11,13 +11,22 @@ const PG_STATUS = {
   '23514': [400, 'Value is not allowed'],                   // check_violation
   '22P02': [400, 'Malformed identifier'],                   // invalid_text_representation
   '22001': [400, 'Value is too long'],                      // string_data_right_truncation
+  '57014': [503, 'That took too long. Try again in a moment.'], // query_canceled (statement_timeout)
 };
+
+// Which request this was, for the log line: env and user are what triage needs first
+// (did it hit stage or prod, who saw it), and neither is in the URL.
+const context = (req) => `${req.method} ${req.originalUrl} env=${req.env ?? '-'} user=${req.userId ?? '-'}`;
 
 // Envelope: `{ error }`, plus `code` when the error carries one.
 const envelope = (message, code) => (code ? { error: message, code } : { error: message });
 
 function errorHandler(err, req, res, _next) {
   if (err instanceof AppError) {
+    // Expected outcomes, but not silent ones: an auth or quota problem that only ever reaches
+    // the client is invisible in the runtime logs.
+    const log = err.status >= 500 ? console.error : console.warn;
+    log(`[error] ${err.status}${err.code ? ` ${err.code}` : ''} on ${context(req)}: ${err.message}`);
     if (err.retryAfter) res.set('Retry-After', String(err.retryAfter));
     return res.status(err.status).json(envelope(err.message, err.code));
   }
@@ -41,11 +50,12 @@ function errorHandler(err, req, res, _next) {
   const mapped = PG_STATUS[err?.code];
   if (mapped) {
     const [status, message] = mapped;
-    console.error(`[error] pg ${err.code} on ${req.method} ${req.originalUrl}: ${err.message}`);
+    console.error(`[error] pg ${err.code} on ${context(req)}: ${err.message}`);
     return res.status(status).json({ error: message });
   }
 
-  console.error(`[error] unhandled on ${req.method} ${req.originalUrl}:`, err);
+  // The stack, not the whole error object: a driver error's `detail` can carry row values.
+  console.error(`[error] unhandled on ${context(req)}: ${err?.stack ?? err}`);
   res.status(500).json({ error: 'Internal error' });
 }
 

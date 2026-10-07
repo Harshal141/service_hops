@@ -57,4 +57,22 @@ function clampInt(raw, { fallback, min, max, field }) {
   return Math.min(Math.max(Number.parseInt(raw, 10), min), max);
 }
 
-module.exports = { isUuid, requireUuid, requireText, clampInt, isHandle, requireHandle };
+/**
+ * A free-text search query param, trimmed and capped. Anything that isn't a
+ * single string — missing, or an array from a repeated `?q=a&q=b` — is an
+ * empty query rather than a TypeError on `.trim()`.
+ */
+function searchQuery(raw, max = 100) {
+  return typeof raw === 'string' ? raw.trim().slice(0, max) : '';
+}
+
+/**
+ * A substring ILIKE pattern for user input. `%`, `_` and `\` are escaped so
+ * they match literally — otherwise `q=%` matches every row.
+ */
+const containsPattern = (query) => `%${query.replace(/[\\%_]/g, '\\$&')}%`;
+
+module.exports = {
+  isUuid, requireUuid, requireText, clampInt, isHandle, requireHandle,
+  searchQuery, containsPattern,
+};

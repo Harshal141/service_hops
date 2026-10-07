@@ -2,19 +2,22 @@ const { MulterError } = require('multer');
 const { errorHandler } = require('./errorHandler');
 const { ConflictError, TooManyRequestsError, NotFoundError } = require('../utils/errors');
 
-function run(err) {
+function run(err, req = { method: 'POST', originalUrl: '/x' }) {
   const res = {
     statusCode: null, body: null, headers: {},
     status(c) { this.statusCode = c; return this; },
     json(b) { this.body = b; return this; },
     set(k, v) { this.headers[k] = v; return this; },
   };
-  errorHandler(err, { method: 'POST', originalUrl: '/x' }, res, () => {});
+  errorHandler(err, req, res, () => {});
   return res;
 }
 
 describe('errorHandler', () => {
-  beforeEach(() => vi.spyOn(console, 'error').mockImplementation(() => {}));
+  beforeEach(() => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
   afterEach(() => vi.restoreAllMocks());
 
   it('sends code only when the error has one', () => {
@@ -36,5 +39,14 @@ describe('errorHandler', () => {
   it('maps JSON body errors and never leaks unknown messages', () => {
     expect(run(Object.assign(new Error('too large'), { type: 'entity.too.large' })).statusCode).toBe(413);
     expect(run(new Error('secret detail'))).toMatchObject({ statusCode: 500, body: { error: 'Internal error' } });
+  });
+
+  it('logs handled errors with env and user, so they show up in runtime logs', () => {
+    run(new ConflictError('Busy', 'already_processing'), { method: 'POST', originalUrl: '/x', env: 'prod', userId: 'u1' });
+    expect(console.warn).toHaveBeenCalledWith(expect.stringMatching(/409 already_processing on POST \/x env=prod user=u1/));
+  });
+
+  it('turns a statement timeout into a 503 rather than a generic 500', () => {
+    expect(run(Object.assign(new Error('canceling statement due to statement timeout'), { code: '57014' })).statusCode).toBe(503);
   });
 });

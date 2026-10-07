@@ -85,3 +85,22 @@ describeDb('profileService.savePatch against Postgres', () => {
     expect((await q(`SELECT bio FROM profile WHERE id = $1`, [user]))[0].bio).toBe('old bio');
   });
 });
+
+describeDb('profileService.addSkill against Postgres', () => {
+  afterAll(async () => {
+    if (seededUsers.length) await q(`DELETE FROM users WHERE id = ANY($1::uuid[])`, [seededUsers]);
+  });
+
+  it('works for a user with no profile row yet, and a repeat add is a no-op', async () => {
+    const tag = crypto.randomBytes(6).toString('hex');
+    const [u] = await q(
+      `INSERT INTO users (user_id, name, email) VALUES ($1, 'Skill Test', $2) RETURNING id`,
+      [`sk-test-${tag}`, `sk-test-${tag}@example.invalid`]);
+    seededUsers.push(u.id);
+    const [skill] = await q(`SELECT id FROM skill WHERE level = 3 LIMIT 1`);
+
+    await profileService.addSkill(u.id, skill.id, ENV);
+    expect(await profileService.addSkill(u.id, skill.id, ENV)).toMatchObject({ profile_id: u.id, skill_id: skill.id });
+    expect(await q(`SELECT skill_id FROM profile_skill WHERE profile_id = $1`, [u.id])).toEqual([{ skill_id: skill.id }]);
+  });
+});

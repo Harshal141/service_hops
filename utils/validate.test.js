@@ -1,4 +1,4 @@
-const { requireUuid, requireText, clampInt } = require('./validate');
+const { requireUuid, requireText, clampInt, searchQuery, containsPattern } = require('./validate');
 const { ValidationError } = require('./errors');
 
 describe('requireUuid', () => {
@@ -39,5 +39,21 @@ describe('requireText', () => {
     expect(requireText('  ', 'bio', { optional: true })).toBeNull();
     expect(requireText(' x ', 'bio', { optional: true })).toBe('x');
     expect(() => requireText(5, 'bio', { optional: true })).toThrow('bio must be text');
+  });
+});
+
+describe('searchQuery', () => {
+  it('trims and caps a string, and treats anything else (a repeated ?q=a&q=b) as empty', () => {
+    expect(searchQuery('  ada ')).toBe('ada');
+    expect(searchQuery('x'.repeat(150))).toHaveLength(100);
+    expect(searchQuery(['a', 'b'])).toBe('');
+    expect(searchQuery(undefined)).toBe('');
+  });
+});
+
+describe('containsPattern', () => {
+  it('escapes LIKE wildcards so they match literally', () => {
+    expect(containsPattern('ada')).toBe('%ada%');
+    expect(containsPattern(String.raw`100%_a\b`)).toBe(String.raw`%100\%\_a\\b%`);
   });
 });

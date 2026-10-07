@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const { getDb } = require('../config/db');
-const { isHandle } = require('../utils/validate');
+const { isHandle, containsPattern } = require('../utils/validate');
 
 // Columns safe to return to any authenticated caller. `email`, `status` and
 // `sub_status` are deliberately absent — a user directory must not double as an
@@ -80,7 +80,9 @@ const upsert = async (userData, env) => {
     INSERT INTO users (user_id, name, email, icon, referred_by)
     VALUES (${handle}, ${name}, ${email}, ${icon}, ${validReferredBy})
     ON CONFLICT (email) DO UPDATE
-      SET name = EXCLUDED.name, icon = EXCLUDED.icon, updated_at = NOW()
+      -- LinkedIn's name seeds a new account only: once it exists the name is the user's own
+      -- (profile editor, resume import), and resetting it here undid their edit on every sign-in.
+      SET name = COALESCE(NULLIF(users.name, ''), EXCLUDED.name), icon = EXCLUDED.icon, updated_at = NOW()
     RETURNING id, user_id, name, icon, (xmax = 0) AS inserted
   `;
   return rows[0];
@@ -110,7 +112,7 @@ const searchByName = async (query, viewerId, env) => {
       ) AS pending_direction
     FROM users u
     LEFT JOIN profile p ON p.id = u.id
-    WHERE u.name ILIKE ${'%' + query + '%'}
+    WHERE u.name ILIKE ${containsPattern(query)}
       AND u.status = 'active'
       AND u.id <> ${viewerId}
     ORDER BY u.name ASC

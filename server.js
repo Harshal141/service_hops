@@ -52,8 +52,12 @@ app.patch('/profile', express.json({ limit: '256kb' }));
 
 app.use(express.json({ limit: '32kb' }));
 
-testDBConnection('stage');
-testDBConnection('prod');
+// A local-dev sanity check only. On Vercel it ran on every cold start and woke both Neon
+// computes (stage traffic waking prod and vice versa) for a SELECT 1 nobody reads.
+if (process.env.VERCEL !== '1') {
+  testDBConnection('stage');
+  testDBConnection('prod');
+}
 
 const PORT = process.env.PORT || 8080;
 

@@ -221,6 +221,30 @@ function validateProfilePatch(body) {
   return { fields, sections, updatedAt };
 }
 
+// What each section_config key hides from a non-owner, as the value it is replaced with.
+const HIDDEN_SECTION_VALUE = Object.freeze({
+  about: ['bio', null],
+  links: ['links', []],
+  skills: ['skills', []],
+  experience: ['experience', []],
+  education: ['education', []],
+});
+
+/**
+ * The profile as a non-owner may see it: every section the owner set `visible: false` is
+ * emptied. Hiding is enforced here rather than left to the FE, because GET /profile/:handle
+ * is public and the raw JSON is readable by anyone.
+ */
+function withoutHiddenSections(profile) {
+  const out = { ...profile };
+  for (const { key, visible } of profile.section_config ?? []) {
+    if (visible !== false || !HIDDEN_SECTION_VALUE[key]) continue;
+    const [field, empty] = HIDDEN_SECTION_VALUE[key];
+    out[field] = empty;
+  }
+  return out;
+}
+
 module.exports = {
   FIELD_LIMITS,
   LINK_TYPES,
@@ -231,4 +255,5 @@ module.exports = {
   parseHttpUrl,
   validateImportPayload,
   validateProfilePatch,
+  withoutHiddenSections,
 };

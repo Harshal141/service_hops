@@ -1,5 +1,7 @@
 const { getDb } = require('../config/db');
 const { ValidationError, ForbiddenError, NotFoundError, ConflictError } = require('../utils/errors');
+const { containsPattern } = require('../utils/validate');
+const { withoutHiddenSections } = require('../utils/profileFields');
 
 // DATE columns as 'YYYY-MM-DD' text: the driver turns a DATE into a JS Date at server-local
 // midnight, which serializes as the previous day when the server runs east of UTC.
@@ -41,7 +43,8 @@ const getByUserId = async (userId, viewerId, env) => {
     `,
   ]);
 
-  return { ...profile, links, experience, education, skills };
+  const full = { ...profile, links, experience, education, skills };
+  return isOwner ? full : withoutHiddenSections(full);
 };
 
 // ── Save (PATCH /profile) ──────────────────────────────────
@@ -184,13 +187,18 @@ const addSkill = async (userId, skillId, env) => {
   if (!skill) throw new NotFoundError('Skill not found');
   if (skill.level !== 3) throw new ValidationError('Only level 3 skills can be tagged');
 
-  const [row] = await sql`
-    INSERT INTO profile_skill (profile_id, skill_id)
-    VALUES (${userId}, ${skillId})
-    ON CONFLICT DO NOTHING
-    RETURNING *
-  `;
-  return row;
+  // A new user has no profile row until their first save, and profile_skill references it:
+  // create it in the same transaction, as savePatch does, or the insert fails the FK (23503).
+  const [, [row]] = await sql.transaction([
+    sql.query(`INSERT INTO profile (id) VALUES ($1) ON CONFLICT (id) DO NOTHING`, [userId]),
+    sql.query(
+      `INSERT INTO profile_skill (profile_id, skill_id) VALUES ($1, $2)
+       ON CONFLICT DO NOTHING
+       RETURNING *`,
+      [userId, skillId]),
+  ]);
+  // already tagged (e.g. a double click): adding is idempotent, so return the row as it stands
+  return row ?? { profile_id: userId, skill_id: Number(skillId) };
 };
 
 const removeSkill = async (userId, skillId, env) => {
@@ -213,7 +221,7 @@ const searchSkills = async (query, env) => {
     FROM skill
     WHERE level = 3
       AND status = 'active'
-      AND name ILIKE ${'%' + query + '%'}
+      AND name ILIKE ${containsPattern(query)}
     ORDER BY user_created ASC, name ASC
     LIMIT 20
   `;

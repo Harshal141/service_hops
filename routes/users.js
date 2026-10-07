@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const userService = require('../services/userService');
 const { asyncHandler } = require('../utils/asyncHandler');
-const { requireUuid, requireHandle } = require('../utils/validate');
+const { requireUuid, requireHandle, searchQuery } = require('../utils/validate');
 const { NotFoundError, ForbiddenError } = require('../utils/errors');
 
 // GET / (list every user) and POST / (create a user) were removed:
@@ -11,9 +11,9 @@ const { NotFoundError, ForbiddenError } = require('../utils/errors');
 //     with no default), and user rows must only ever come from /auth/upsert
 
 router.get('/search', asyncHandler(async (req, res) => {
-  const query = (req.query.q ?? '').trim();
+  const query = searchQuery(req.query.q);
   if (!query) return res.json([]);
-  res.json(await userService.searchByName(query.slice(0, 100), req.userId, req.env));
+  res.json(await userService.searchByName(query, req.userId, req.env));
 }));
 
 // Accepts the public slug or (for links already shared as a UUID) the raw id —

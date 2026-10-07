@@ -1,4 +1,4 @@
-const { isIsoDate, isEduYear, parseHttpUrl, validateImportPayload, validateProfilePatch } = require('./profileFields');
+const { isIsoDate, isEduYear, parseHttpUrl, validateImportPayload, validateProfilePatch, withoutHiddenSections } = require('./profileFields');
 const { ValidationError } = require('./errors');
 
 describe('shape checks', () => {
@@ -128,4 +128,30 @@ describe('validateProfilePatch', () => {
   for (const [name, body] of Object.entries(rejects)) {
     it(`rejects: ${name}`, () => expect(() => validateProfilePatch(body)).toThrow(ValidationError));
   }
+});
+
+describe('withoutHiddenSections', () => {
+  const profile = {
+    name: 'Jane',
+    bio: 'About me',
+    links: [{ url: 'https://jane.dev' }],
+    skills: [{ id: 1 }],
+    experience: [{ company: 'Acme' }],
+    education: [{ school: 'Uni' }],
+    section_config: [
+      { key: 'links', visible: false },
+      { key: 'about', visible: false },
+      { key: 'skills', visible: true },
+      { key: 'experience', visible: true },
+      { key: 'education', visible: false },
+    ],
+  };
+
+  it('empties exactly the sections the owner hid, and leaves the rest and the input untouched', () => {
+    expect(withoutHiddenSections(profile)).toMatchObject({
+      name: 'Jane', bio: null, links: [], education: [],
+      skills: [{ id: 1 }], experience: [{ company: 'Acme' }],
+    });
+    expect(profile.links).toHaveLength(1);
+  });
 });
