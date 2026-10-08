@@ -10,7 +10,8 @@ const environment = process.env.VERCEL_ENV ?? 'local';
 
 Sentry.init({
   dsn: process.env.SENTRY_DSN,
-  enabled: Boolean(process.env.SENTRY_DSN),
+  // Never from the test suite: route tests load server.js, and .env may carry a real DSN.
+  enabled: Boolean(process.env.SENTRY_DSN) && !process.env.VITEST,
   environment,
   sendDefaultPii: false,
   // Errors are always captured; this only samples performance spans. A request the
