@@ -203,7 +203,9 @@ The FE depends on these. Changing one is a cross-repo change.
   failure (e.g. `file_too_big`, `already_processing`, `daily_cap`, `ai_failed`). Set it via
   the typed error's `code` argument (`new ConflictError(msg, 'already_applied')`); codes are
   part of the contract, so renaming one is a cross-repo change. Never a bare string, never
-  `{ message }`, never a 200 carrying an error body.
+  `{ message }`, never a 200 carrying an error body. When a Sentry trace is active the
+  envelope also carries `trace_id` (and every response an `X-Trace-Id` header), the same id
+  the FE's errors for that request have, so an FE error and its BE cause can be paired.
 - **Status codes:**
   | Code | Meaning |
   |---|---|
@@ -231,6 +233,9 @@ The FE depends on these. Changing one is a cross-repo change.
 - Prefixed and structured: `[auth]`, `[Database]`, `[connection]`. Match the existing style.
 - Log the *cause* on the server, return the *safe summary* to the client.
 - `console.error` for anything that reaches the error middleware as a non-`AppError`.
+- Every `console.error` is also a Sentry event (`instrument.js`, loaded first in
+  `server.js`). Don't call Sentry directly for something you already log at error level, it
+  would be reported twice. `console.warn` is not sent.
 - No per-request success logging in hot paths.
 
 ---

@@ -1,3 +1,4 @@
+const Sentry = require('@sentry/node');
 const { MulterError } = require('multer');
 const { errorHandler } = require('./errorHandler');
 const { ConflictError, TooManyRequestsError, NotFoundError } = require('../utils/errors');
@@ -44,6 +45,19 @@ describe('errorHandler', () => {
   it('logs handled errors with env and user, so they show up in runtime logs', () => {
     run(new ConflictError('Busy', 'already_processing'), { method: 'POST', originalUrl: '/x', env: 'prod', userId: 'u1' });
     expect(console.warn).toHaveBeenCalledWith(expect.stringMatching(/409 already_processing on POST \/x env=prod user=u1/));
+  });
+
+  it('adds the active trace id to the envelope and the log line', () => {
+    vi.spyOn(Sentry, 'getTraceData').mockReturnValue({ 'sentry-trace': 'abc123-def456-1' });
+    expect(run(new NotFoundError('Nope')).body).toEqual({ error: 'Nope', trace_id: 'abc123' });
+    expect(console.warn).toHaveBeenCalledWith(expect.stringMatching(/trace=abc123/));
+  });
+
+  it('reports an unhandled error to Sentry as an exception', () => {
+    const capture = vi.spyOn(Sentry, 'captureException').mockReturnValue('id');
+    const err = new Error('secret detail');
+    run(err);
+    expect(capture).toHaveBeenCalledWith(err);
   });
 
   it('turns a statement timeout into a 503 rather than a generic 500', () => {

@@ -1,5 +1,8 @@
+const Sentry = require('@sentry/node');
+const { consoleSandbox } = require('@sentry/core');
 const { MulterError } = require('multer');
 const { AppError } = require('../utils/errors');
+const { currentTraceId } = require('../utils/sentry');
 
 // Postgres error codes with a meaningful status — a client mistake, or a timeout — rather than a bug.
 // The client gets the generic meaning; the driver's message stays in the log,
@@ -15,11 +18,19 @@ const PG_STATUS = {
 };
 
 // Which request this was, for the log line: env and user are what triage needs first
-// (did it hit stage or prod, who saw it), and neither is in the URL.
-const context = (req) => `${req.method} ${req.originalUrl} env=${req.env ?? '-'} user=${req.userId ?? '-'}`;
+// (did it hit stage or prod, who saw it), and neither is in the URL. The trace id
+// matches the Sentry trace, so a Vercel log line can be found there and vice versa.
+const context = (req) =>
+  `${req.method} ${req.originalUrl} env=${req.env ?? '-'} user=${req.userId ?? '-'} trace=${currentTraceId() ?? '-'}`;
 
-// Envelope: `{ error }`, plus `code` when the error carries one.
-const envelope = (message, code) => (code ? { error: message, code } : { error: message });
+// Envelope: `{ error }`, plus `code` when the error carries one, plus `trace_id` when
+// a trace is active so the FE can tie its own error to this one.
+function envelope(message, code) {
+  const body = code ? { error: message, code } : { error: message };
+  const traceId = currentTraceId();
+  if (traceId) body.trace_id = traceId;
+  return body;
+}
 
 function errorHandler(err, req, res, _next) {
   if (err instanceof AppError) {
@@ -51,12 +62,16 @@ function errorHandler(err, req, res, _next) {
   if (mapped) {
     const [status, message] = mapped;
     console.error(`[error] pg ${err.code} on ${context(req)}: ${err.message}`);
-    return res.status(status).json({ error: message });
+    return res.status(status).json(envelope(message));
   }
 
+  // Sent to Sentry as an exception (real stack, grouped by type) rather than as the
+  // log line below. Sentry sends only message and stack, never a driver error's `detail`.
+  Sentry.captureException(err);
   // The stack, not the whole error object: a driver error's `detail` can carry row values.
-  console.error(`[error] unhandled on ${context(req)}: ${err?.stack ?? err}`);
-  res.status(500).json({ error: 'Internal error' });
+  // Sandboxed so the console capture does not report this a second time as a message.
+  consoleSandbox(() => console.error(`[error] unhandled on ${context(req)}: ${err?.stack ?? err}`));
+  res.status(500).json(envelope('Internal error'));
 }
 
 module.exports = { errorHandler };

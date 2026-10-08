@@ -1,4 +1,5 @@
 const { hkdf } = require('@panva/hkdf');
+const Sentry = require('@sentry/node');
 
 // jose v6 is ESM-only and Vercel's Node bootstrap cannot require() an ES module
 // — a top-level require crashes the function at cold start with ERR_REQUIRE_ESM,
@@ -85,6 +86,8 @@ async function requireAuth(req, res, next) {
   }
 
   req.userId = canonicalId(payload.id);
+  // Only the id, never email or name: enough to see who an error affected.
+  Sentry.setUser({ id: req.userId });
   next();
 }
 
@@ -96,6 +99,7 @@ async function optionalAuth(req, _res, next) {
     const payload = await verifySessionToken(token);
     if (payload?.id && tokenEnv(payload) === req.env) {
       req.userId = canonicalId(payload.id);
+      Sentry.setUser({ id: req.userId });
     }
   }
   next();

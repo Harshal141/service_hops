@@ -1,4 +1,6 @@
 require('dotenv').config();
+// Before express: Sentry has to instrument it as it loads.
+require('./instrument');
 const express = require('express');
 const cors = require('cors');
 const usersRouter = require('./routes/users');
@@ -10,6 +12,7 @@ const connectionRouter = require('./routes/connection');
 const flagRouter = require('./routes/flag');
 const { requireAuth } = require('./middleware/auth');
 const { attachEnv } = require('./middleware/env');
+const { traceContext } = require('./middleware/traceContext');
 const { errorHandler } = require('./middleware/errorHandler');
 const { testDBConnection } = require('./config/db');
 
@@ -40,6 +43,9 @@ app.use(cors({ origin: allowedOrigins, credentials: true }));
 // Resolve X-Env once, before auth — requireAuth checks the token's env claim
 // against it, so this must run first.
 app.use(attachEnv);
+
+// Trace id response header, db_env tag on Sentry events, and the post-response flush.
+app.use(traceContext);
 
 // Resume import: multipart upload (multer) and a larger JSON body for apply, so it is
 // mounted ahead of the global 32kb JSON parser, and before profileRouter (whose public
